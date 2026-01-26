@@ -135,7 +135,7 @@ pub fn build_preview(image: &RgbaImage, fixed_width: u32) -> PreviewImage {
     let scale = (fixed_width as f32) / (width as f32).max(1.0);
     let target_width = fixed_width.max(1);
     let target_height = ((height as f32) * scale).round().max(1.0) as u32;
-    let resized = imageops::resize(image, target_width, target_height, FilterType::Nearest);
+    let resized = imageops::resize(image, target_width, target_height, FilterType::Triangle);
     PreviewImage {
         width: resized.width(),
         height: resized.height(),
