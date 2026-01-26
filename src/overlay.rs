@@ -109,6 +109,7 @@ struct LayerPreview {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     keyboard_focus: bool,
     pointer: Option<wl_pointer::WlPointer>,
+    hover_button: Option<u32>,
 }
 
 impl LayerPreview {
@@ -205,7 +206,7 @@ impl LayerPreview {
 
         // Draw control bar at the bottom
         let bar_y = self.height.saturating_sub(CONTROL_BAR_HEIGHT);
-        draw_control_bar(canvas, self.width, self.height, bar_y, self.paused);
+        draw_control_bar(canvas, self.width, self.height, bar_y, self.paused, self.hover_button);
 
         self.layer
             .wl_surface()
@@ -253,6 +254,42 @@ impl LayerPreview {
             _ => UserCommand::Cancel,
         };
         self.handle_command(qh, command);
+    }
+
+    fn update_hover(&mut self, qh: &QueueHandle<Self>, position: (f64, f64)) {
+        if self.width == 0 {
+            return;
+        }
+
+        let bar_y = self.height.saturating_sub(CONTROL_BAR_HEIGHT) as f64;
+        let new_hover = if position.0 >= 0.0
+            && position.1 >= bar_y
+            && position.1 < self.height as f64
+            && position.0 < self.width as f64
+        {
+            let x = position.0 as u32;
+            let segment = self.width / CONTROL_BUTTON_COUNT;
+            let index = if segment == 0 {
+                0
+            } else {
+                (x / segment).min(CONTROL_BUTTON_COUNT - 1)
+            };
+            Some(index)
+        } else {
+            None
+        };
+
+        if new_hover != self.hover_button {
+            self.hover_button = new_hover;
+            self.request_redraw(qh);
+        }
+    }
+
+    fn clear_hover(&mut self, qh: &QueueHandle<Self>) {
+        if self.hover_button.is_some() {
+            self.hover_button = None;
+            self.request_redraw(qh);
+        }
     }
 }
 
@@ -514,8 +551,17 @@ impl PointerHandler for LayerPreview {
             if &event.surface != self.layer.wl_surface() {
                 continue;
             }
-            if let PointerEventKind::Press { .. } = event.kind {
-                self.handle_bar_press(qh, event.position);
+            match event.kind {
+                PointerEventKind::Press { .. } => {
+                    self.handle_bar_press(qh, event.position);
+                }
+                PointerEventKind::Motion { .. } => {
+                    self.update_hover(qh, event.position);
+                }
+                PointerEventKind::Leave { .. } => {
+                    self.clear_hover(qh);
+                }
+                _ => {}
             }
         }
     }
@@ -620,6 +666,7 @@ fn run_layer_shell_overlay(
         keyboard: None,
         keyboard_focus: false,
         pointer: None,
+        hover_button: None,
     };
 
     // Perform initial roundtrip to ensure layer surface is configured
@@ -670,7 +717,7 @@ fn run_layer_shell_overlay(
     Ok(())
 }
 
-fn draw_control_bar(canvas: &mut [u8], width: u32, height: u32, bar_y: u32, paused: bool) {
+fn draw_control_bar(canvas: &mut [u8], width: u32, height: u32, bar_y: u32, paused: bool, hover_button: Option<u32>) {
     let bar_height = CONTROL_BAR_HEIGHT.min(height.saturating_sub(bar_y));
     if width == 0 || bar_height == 0 {
         return;
@@ -698,7 +745,9 @@ fn draw_control_bar(canvas: &mut [u8], width: u32, height: u32, bar_y: u32, paus
             continue;
         }
 
-        let color = match index {
+        let is_hovered = hover_button == Some(index);
+
+        let base_color = match index {
             0 => COLOR_SAVE,
             1 => COLOR_COPY,
             2 => {
@@ -709,6 +758,13 @@ fn draw_control_bar(canvas: &mut [u8], width: u32, height: u32, bar_y: u32, paus
                 }
             }
             _ => COLOR_CANCEL,
+        };
+
+        // Lighten color on hover
+        let color = if is_hovered {
+            lighten_color(base_color, 40)
+        } else {
+            base_color
         };
 
         // Draw rounded rectangle button
@@ -763,6 +819,15 @@ fn draw_control_bar(canvas: &mut [u8], width: u32, height: u32, bar_y: u32, paus
             }
         }
     }
+}
+
+fn lighten_color(color: [u8; 4], amount: u8) -> [u8; 4] {
+    [
+        color[0].saturating_add(amount),
+        color[1].saturating_add(amount),
+        color[2].saturating_add(amount),
+        color[3],
+    ]
 }
 
 fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
