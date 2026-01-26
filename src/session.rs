@@ -159,6 +159,7 @@ fn spawn_capture_worker(
             accept_diff: 5.0,
             min_append: 15,
             approx_diff: 1.0,
+            match_width: preview_width.max(200),
             algorithm,
         };
         let mut stitcher = Stitcher::new(config);

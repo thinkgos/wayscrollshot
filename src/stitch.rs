@@ -3,17 +3,24 @@ use std::sync::Arc;
 
 use hora::core::ann_index::ANNIndex;
 use hora::index::hnsw_idx::HNSWIndex;
+use hora::index::hnsw_params::HNSWParams;
 use image::imageops::{self, FilterType};
 use image::{GenericImage, GrayImage, RgbaImage};
-use imageproc::corners::{corners_fast9, corners_fast12};
+use imageproc::corners::{corners_fast9, corners_fast12, Corner};
 use rayon::prelude::*;
 
 use crate::cli::Algorithm;
 use crate::types::{PreviewImage, StitchStats};
 
-const DESCRIPTOR_SIZE: usize = 32;
-const CORNER_THRESHOLD: u8 = 20;
+const DESCRIPTOR_PATCH_SIZE: usize = 9;
+const DESCRIPTOR_DIM: usize = DESCRIPTOR_PATCH_SIZE & !1;
+const CORNER_THRESHOLD: u8 = 64;
 const DISTANCE_THRESHOLD: f32 = 0.1;
+const MAX_FAST_CORNERS: usize = 1200;
+const MIN_FAST_CORNERS: usize = 30;
+const STATIC_DIFF_THRESHOLD: u8 = 6;
+const DX_TOLERANCE: i32 = 2;
+const MIN_OFFSET_FILTER: i32 = 2;
 
 pub struct MatchConfig {
     pub min_overlap: u32,
@@ -21,6 +28,7 @@ pub struct MatchConfig {
     pub min_append: u32,
     pub approx_diff: f32,
     pub algorithm: Algorithm,
+    pub match_width: u32,
 }
 
 /// FAST corner index with HNSW
@@ -32,10 +40,10 @@ struct FastIndex {
 
 impl FastIndex {
     fn new() -> Self {
-        let hnsw = HNSWIndex::new(
-            DESCRIPTOR_SIZE,
-            &hora::index::hnsw_params::HNSWParams::<f32>::default(),
-        );
+        let mut params = HNSWParams::<f32>::default();
+        params.ef_search = 32;
+        params.ef_build = 16;
+        let hnsw = HNSWIndex::new(DESCRIPTOR_DIM, &params);
         Self {
             corners: Vec::new(),
             descriptors: Vec::new(),
@@ -44,28 +52,12 @@ impl FastIndex {
     }
 
     fn build(gray: &GrayImage) -> Self {
+        let features = FastFeatures::build(gray, None);
         let mut index = Self::new();
 
-        // Detect corners using FAST
-        let corners_fast12 = corners_fast12(gray, CORNER_THRESHOLD);
-        let corners = if corners_fast12.len() > 200 {
-            corners_fast12
-        } else {
-            corners_fast9(gray, CORNER_THRESHOLD)
-        };
+        index.corners = features.corners;
+        index.descriptors = features.descriptors;
 
-        if corners.is_empty() {
-            return index;
-        }
-
-        // Compute descriptors and build index
-        for corner in &corners {
-            let desc = compute_descriptor(gray, corner.x, corner.y);
-            index.corners.push((corner.x, corner.y));
-            index.descriptors.push(desc);
-        }
-
-        // Add to HNSW index
         for (i, desc) in index.descriptors.iter().enumerate() {
             let _ = index.hnsw.add(desc, i);
         }
@@ -75,25 +67,88 @@ impl FastIndex {
     }
 }
 
+struct FastFeatures {
+    corners: Vec<(u32, u32)>,
+    descriptors: Vec<Vec<f32>>,
+}
+
+impl FastFeatures {
+    fn build(gray: &GrayImage, prev_gray: Option<&GrayImage>) -> Self {
+        let mut index = Self {
+            corners: Vec::new(),
+            descriptors: Vec::new(),
+        };
+
+        // Detect corners using FAST
+        let corners_fast12 = corners_fast12(gray, CORNER_THRESHOLD);
+        let corners_fast9 = corners_fast9(gray, CORNER_THRESHOLD);
+        let mut corners = if corners_fast12.len() > 200 {
+            corners_fast12.clone()
+        } else {
+            corners_fast9.clone()
+        };
+        let original_corners = corners.clone();
+
+        if let Some(prev) = prev_gray {
+            if prev.width() == gray.width() && prev.height() == gray.height() {
+                corners = filter_corners_by_diff(&corners, gray, prev);
+                if corners.len() < MIN_FAST_CORNERS {
+                    corners = original_corners;
+                }
+            }
+        }
+
+        corners = downsample_corners(corners, MAX_FAST_CORNERS);
+
+        // Compute descriptors and build index
+        for corner in &corners {
+            let desc = compute_descriptor(gray, corner.x, corner.y);
+            index.corners.push((corner.x, corner.y));
+            index.descriptors.push(desc);
+        }
+
+        index
+    }
+}
+
 /// Compute descriptor for a corner point (row + column features)
 fn compute_descriptor(gray: &GrayImage, x: u32, y: u32) -> Vec<f32> {
-    let w = gray.width();
-    let h = gray.height();
-    let half = DESCRIPTOR_SIZE / 2;
-    let mut desc = vec![0.0f32; DESCRIPTOR_SIZE];
+    let w = gray.width() as i32;
+    let h = gray.height() as i32;
+    let descriptor_size = DESCRIPTOR_PATCH_SIZE;
+    let half_size = descriptor_size as i32 / 2;
+    let mut desc = Vec::with_capacity(DESCRIPTOR_DIM);
 
-    // Row features (horizontal sampling)
-    for i in 0..half {
-        let offset = (i as i32 - half as i32 / 2) * 2;
-        let sample_x = (x as i32 + offset).clamp(0, w as i32 - 1) as u32;
-        desc[i] = gray.get_pixel(sample_x, y)[0] as f32 / 255.0;
+    // Row features
+    for row in 0..(descriptor_size / 2) {
+        let yy = y as i32 + (-half_size + row as i32 * 2);
+        let mut sum = 0.0;
+        let mut count = 0;
+        for col in 0..(descriptor_size / 2) {
+            let xx = x as i32 + (-half_size + col as i32 * 2);
+            if xx >= 0 && xx < w && yy >= 0 && yy < h {
+                let pixel = gray.get_pixel(xx as u32, yy as u32)[0] as f32 / 255.0;
+                sum += pixel;
+                count += 1;
+            }
+        }
+        desc.push(if count > 0 { sum / count as f32 } else { 0.0 });
     }
 
-    // Column features (vertical sampling)
-    for i in 0..half {
-        let offset = (i as i32 - half as i32 / 2) * 2;
-        let sample_y = (y as i32 + offset).clamp(0, h as i32 - 1) as u32;
-        desc[half + i] = gray.get_pixel(x, sample_y)[0] as f32 / 255.0;
+    // Column features
+    for col in 0..(descriptor_size / 2) {
+        let xx = x as i32 + (-half_size + col as i32 * 2);
+        let mut sum = 0.0;
+        let mut count = 0;
+        for row in 0..(descriptor_size / 2) {
+            let yy = y as i32 + (-half_size + row as i32 * 2);
+            if xx >= 0 && xx < w && yy >= 0 && yy < h {
+                let pixel = gray.get_pixel(xx as u32, yy as u32)[0] as f32 / 255.0;
+                sum += pixel;
+                count += 1;
+            }
+        }
+        desc.push(if count > 0 { sum / count as f32 } else { 0.0 });
     }
 
     desc
@@ -113,6 +168,7 @@ pub struct Stitcher {
     last_frame: Option<RgbaImage>,
     last_cols: Option<ColSamples>,
     last_fast_index: Option<FastIndex>,
+    last_fast_gray: Option<GrayImage>,
     last_offset: i32,
     stats: StitchStats,
     config: MatchConfig,
@@ -134,6 +190,7 @@ impl Stitcher {
             last_frame: None,
             last_cols: None,
             last_fast_index: None,
+            last_fast_gray: None,
             last_offset: 0,
             stats: StitchStats {
                 frame_count: 0,
@@ -145,6 +202,8 @@ impl Stitcher {
     }
 
     pub fn push_frame(&mut self, frame: RgbaImage) -> StitchOutcome {
+        log::debug!("push_frame: {}x{}", frame.width(), frame.height());
+
         if self.full_image.is_none() {
             let height = frame.height();
             self.stats.frame_count = 1;
@@ -155,8 +214,9 @@ impl Stitcher {
 
             match self.config.algorithm {
                 Algorithm::Fast => {
-                    let gray = rgba_to_gray(&frame);
+                    let gray = prepare_fast_gray(&frame, self.config.match_width);
                     self.last_fast_index = Some(FastIndex::build(&gray));
+                    self.last_fast_gray = Some(gray);
                 }
                 _ => {
                     self.last_cols = Some(self.compute_cols(&frame));
@@ -170,6 +230,8 @@ impl Stitcher {
             Algorithm::Template => self.find_offset_template(&frame),
             Algorithm::ColSample | Algorithm::Edge => self.find_offset_colsample(&frame),
         };
+
+        log::debug!("Offset: {}, confidence: {}", offset, confidence);
 
         if confidence > self.config.accept_diff {
             self.update_last_frame(frame);
@@ -209,8 +271,9 @@ impl Stitcher {
     fn update_last_frame(&mut self, frame: RgbaImage) {
         match self.config.algorithm {
             Algorithm::Fast => {
-                let gray = rgba_to_gray(&frame);
+                let gray = prepare_fast_gray(&frame, self.config.match_width);
                 self.last_fast_index = Some(FastIndex::build(&gray));
+                self.last_fast_gray = Some(gray);
             }
             _ => {
                 self.last_cols = Some(self.compute_cols(&frame));
@@ -237,15 +300,15 @@ impl Stitcher {
             return (0, f32::MAX);
         }
 
-        let gray = rgba_to_gray(frame);
-        let curr_index = FastIndex::build(&gray);
+        let gray = prepare_fast_gray(frame, self.config.match_width);
+        let curr_features = FastFeatures::build(&gray, self.last_fast_gray.as_ref());
 
-        if curr_index.corners.is_empty() {
+        if curr_features.corners.is_empty() {
             return (0, f32::MAX);
         }
 
         // Match features using HNSW
-        let offsets: Vec<i32> = curr_index
+        let offsets: Vec<i32> = curr_features
             .descriptors
             .par_iter()
             .enumerate()
@@ -262,16 +325,24 @@ impl Stitcher {
                 }
 
                 // Calculate Y offset (vertical scroll)
-                let (_, prev_y) = prev_index.corners[idx];
-                let (_, curr_y) = curr_index.corners[i];
+                let (prev_x, prev_y) = prev_index.corners[idx];
+                let (curr_x, curr_y) = curr_features.corners[i];
+                if (curr_x as i32 - prev_x as i32).abs() > DX_TOLERANCE {
+                    return None;
+                }
                 let dy = curr_y as i32 - prev_y as i32;
 
                 // For vertical scrolling, we expect negative dy (content moves up)
-                Some(-dy)
+                let offset = -dy;
+                if offset < MIN_OFFSET_FILTER {
+                    return None;
+                }
+                Some(offset)
             })
             .collect();
 
         if offsets.is_empty() {
+            log::debug!("FAST: no valid offsets found");
             return (0, f32::MAX);
         }
 
@@ -287,14 +358,25 @@ impl Stitcher {
         let (best_offset, best_count) = sorted[0];
         let second_count = sorted.get(1).map(|(_, c)| *c).unwrap_or(0);
 
+        log::debug!(
+            "FAST: corners={}, offsets={}, best_offset={}, best_count={}, second_count={}",
+            curr_features.corners.len(),
+            offsets.len(),
+            best_offset,
+            best_count,
+            second_count
+        );
+
         // Confidence checks
-        let min_matches = (curr_index.corners.len() as i32 / 10).max(3);
+        let min_matches = (curr_features.corners.len() as i32 / 10).max(3);
         if best_count < min_matches {
+            log::debug!("FAST: best_count {} < min_matches {}", best_count, min_matches);
             return (0, f32::MAX);
         }
 
         // Avoid ambiguity
         if best_count < second_count * 2 {
+            log::debug!("FAST: ambiguous result");
             return (0, f32::MAX);
         }
 
@@ -379,9 +461,50 @@ impl Stitcher {
         self.full_image.clone()
     }
 
-    pub fn stats(&self) -> StitchStats {
-        self.stats.clone()
+pub fn stats(&self) -> StitchStats {
+    self.stats.clone()
+}
+}
+
+fn prepare_fast_gray(img: &RgbaImage, target_width: u32) -> GrayImage {
+    let gray = rgba_to_gray(img);
+    let width = gray.width();
+    if target_width == 0 || width <= target_width {
+        return gray;
     }
+    let target_width = target_width.max(1).min(width);
+    let height = gray.height();
+    imageops::resize(&gray, target_width, height, FilterType::Nearest)
+}
+
+fn downsample_corners(corners: Vec<Corner>, max_corners: usize) -> Vec<Corner> {
+    if corners.len() <= max_corners {
+        return corners;
+    }
+    let step = corners.len() / max_corners + 1;
+    corners.into_iter().step_by(step).collect()
+}
+
+fn filter_corners_by_diff(
+    corners: &[Corner],
+    gray: &GrayImage,
+    prev_gray: &GrayImage,
+) -> Vec<Corner> {
+    corners
+        .iter()
+        .filter_map(|corner| {
+            if corner.x >= gray.width() || corner.y >= gray.height() {
+                return None;
+            }
+            let curr = gray.get_pixel(corner.x, corner.y)[0];
+            let prev = prev_gray.get_pixel(corner.x, corner.y)[0];
+            if curr.abs_diff(prev) >= STATIC_DIFF_THRESHOLD {
+                Some(*corner)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn rgba_to_gray(img: &RgbaImage) -> GrayImage {

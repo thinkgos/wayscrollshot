@@ -125,6 +125,7 @@ wayscrollshot --no-border
 wayscrollshot -a col-sample  # Default: fast column sampling
 wayscrollshot -a template    # Template matching (more accurate)
 wayscrollshot -a edge        # Edge detection (for transparent backgrounds)
+wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 ```
 
 ### Options
@@ -136,7 +137,7 @@ wayscrollshot -a edge        # Edge detection (for transparent backgrounds)
 | `-c, --clipboard` | Copy to clipboard instead of saving | false |
 | `--no-preview` | Disable preview window | false |
 | `--no-border` | Disable region border overlay | false |
-| `-a, --algorithm <ALG>` | Stitching algorithm: `col-sample`, `template`, `edge` | col-sample |
+| `-a, --algorithm <ALG>` | Stitching algorithm: `col-sample`, `template`, `edge`, `fast` | col-sample |
 
 ### Controls
 
@@ -188,8 +189,20 @@ wayscrollshot -a edge        # Edge detection (for transparent backgrounds)
 
 MIT
 
+## Contributing
+
+Contributions are welcome! Areas that could use improvement:
+
+- **Algorithm optimization**: The `fast` algorithm (FAST corner + HNSW) needs tuning for better accuracy
+- **Cross-platform support**: Currently Linux-only due to Wayland dependency
+- **Performance**: Reduce memory usage for very long screenshots
+- **UI improvements**: Better visual feedback during capture
+
+Please open an issue to discuss major changes before submitting a PR.
+
 ## Acknowledgments
 
 - [screenshot-splicing](https://github.com/aspect-ratio/screenshot-splicing) - Column sampling algorithm inspiration
+- [snow-shot](https://github.com/mg-chao/snow-shot) - FAST corner + HNSW algorithm reference
 - [smithay-client-toolkit](https://github.com/Smithay/client-toolkit) - Wayland client library
-- [tiny-skia](https://github.com/ArtRand/tiny-skia) - 2D graphics library
+- [tiny-skia](https://github.com/RazrFalcon/tiny-skia) - 2D graphics library

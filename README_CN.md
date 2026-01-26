@@ -125,6 +125,7 @@ wayscrollshot --no-border
 wayscrollshot -a col-sample  # 默认：快速列采样
 wayscrollshot -a template    # 模板匹配（更精确）
 wayscrollshot -a edge        # 边缘检测（适用于透明背景）
+wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）
 ```
 
 ### 选项
@@ -136,7 +137,7 @@ wayscrollshot -a edge        # 边缘检测（适用于透明背景）
 | `-c, --clipboard` | 复制到剪贴板而非保存 | false |
 | `--no-preview` | 禁用预览窗口 | false |
 | `--no-border` | 禁用区域边框覆盖层 | false |
-| `-a, --algorithm <ALG>` | 拼接算法：`col-sample`、`template`、`edge` | col-sample |
+| `-a, --algorithm <ALG>` | 拼接算法：`col-sample`、`template`、`edge`、`fast` | col-sample |
 
 ### 控制方式
 
@@ -188,8 +189,20 @@ wayscrollshot -a edge        # 边缘检测（适用于透明背景）
 
 MIT
 
+## 贡献
+
+欢迎贡献！以下是可以改进的方向：
+
+- **算法优化**：`fast` 算法（FAST 角点 + HNSW）需要调优以提高准确性
+- **跨平台支持**：由于 Wayland 依赖，目前仅支持 Linux
+- **性能优化**：减少超长截图的内存占用
+- **UI 改进**：捕获过程中提供更好的视觉反馈
+
+请在提交 PR 之前先开 issue 讨论重大更改。
+
 ## 致谢
 
 - [screenshot-splicing](https://github.com/aspect-ratio/screenshot-splicing) - 列采样算法灵感来源
+- [snow-shot](https://github.com/mg-chao/snow-shot) - FAST 角点 + HNSW 算法参考
 - [smithay-client-toolkit](https://github.com/Smithay/client-toolkit) - Wayland 客户端库
-- [tiny-skia](https://github.com/ArtRand/tiny-skia) - 2D 图形库
+- [tiny-skia](https://github.com/RazrFalcon/tiny-skia) - 2D 图形库
