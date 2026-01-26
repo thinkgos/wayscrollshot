@@ -1,10 +1,19 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use hora::core::ann_index::ANNIndex;
+use hora::index::hnsw_idx::HNSWIndex;
 use image::imageops::{self, FilterType};
-use image::{GenericImage, RgbaImage};
+use image::{GenericImage, GrayImage, RgbaImage};
+use imageproc::corners::{corners_fast9, corners_fast12};
+use rayon::prelude::*;
 
 use crate::cli::Algorithm;
 use crate::types::{PreviewImage, StitchStats};
+
+const DESCRIPTOR_SIZE: usize = 32;
+const CORNER_THRESHOLD: u8 = 20;
+const DISTANCE_THRESHOLD: f32 = 0.1;
 
 pub struct MatchConfig {
     pub min_overlap: u32,
@@ -14,10 +23,96 @@ pub struct MatchConfig {
     pub algorithm: Algorithm,
 }
 
+/// FAST corner index with HNSW
+struct FastIndex {
+    corners: Vec<(u32, u32)>,
+    descriptors: Vec<Vec<f32>>,
+    hnsw: HNSWIndex<f32, usize>,
+}
+
+impl FastIndex {
+    fn new() -> Self {
+        let hnsw = HNSWIndex::new(
+            DESCRIPTOR_SIZE,
+            &hora::index::hnsw_params::HNSWParams::<f32>::default(),
+        );
+        Self {
+            corners: Vec::new(),
+            descriptors: Vec::new(),
+            hnsw,
+        }
+    }
+
+    fn build(gray: &GrayImage) -> Self {
+        let mut index = Self::new();
+
+        // Detect corners using FAST
+        let corners_fast12 = corners_fast12(gray, CORNER_THRESHOLD);
+        let corners = if corners_fast12.len() > 200 {
+            corners_fast12
+        } else {
+            corners_fast9(gray, CORNER_THRESHOLD)
+        };
+
+        if corners.is_empty() {
+            return index;
+        }
+
+        // Compute descriptors and build index
+        for corner in &corners {
+            let desc = compute_descriptor(gray, corner.x, corner.y);
+            index.corners.push((corner.x, corner.y));
+            index.descriptors.push(desc);
+        }
+
+        // Add to HNSW index
+        for (i, desc) in index.descriptors.iter().enumerate() {
+            let _ = index.hnsw.add(desc, i);
+        }
+        let _ = index.hnsw.build(hora::core::metrics::Metric::Euclidean);
+
+        index
+    }
+}
+
+/// Compute descriptor for a corner point (row + column features)
+fn compute_descriptor(gray: &GrayImage, x: u32, y: u32) -> Vec<f32> {
+    let w = gray.width();
+    let h = gray.height();
+    let half = DESCRIPTOR_SIZE / 2;
+    let mut desc = vec![0.0f32; DESCRIPTOR_SIZE];
+
+    // Row features (horizontal sampling)
+    for i in 0..half {
+        let offset = (i as i32 - half as i32 / 2) * 2;
+        let sample_x = (x as i32 + offset).clamp(0, w as i32 - 1) as u32;
+        desc[i] = gray.get_pixel(sample_x, y)[0] as f32 / 255.0;
+    }
+
+    // Column features (vertical sampling)
+    for i in 0..half {
+        let offset = (i as i32 - half as i32 / 2) * 2;
+        let sample_y = (y as i32 + offset).clamp(0, h as i32 - 1) as u32;
+        desc[half + i] = gray.get_pixel(x, sample_y)[0] as f32 / 255.0;
+    }
+
+    desc
+}
+
+/// Euclidean distance between two descriptors
+fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).powi(2))
+        .sum::<f32>()
+        .sqrt()
+}
+
 pub struct Stitcher {
     full_image: Option<Arc<RgbaImage>>,
     last_frame: Option<RgbaImage>,
     last_cols: Option<ColSamples>,
+    last_fast_index: Option<FastIndex>,
     last_offset: i32,
     stats: StitchStats,
     config: MatchConfig,
@@ -30,7 +125,6 @@ pub enum StitchOutcome {
     NoMatch,
 }
 
-/// Column samples: (height, num_groups) matrix
 type ColSamples = Vec<Vec<f32>>;
 
 impl Stitcher {
@@ -39,6 +133,7 @@ impl Stitcher {
             full_image: None,
             last_frame: None,
             last_cols: None,
+            last_fast_index: None,
             last_offset: 0,
             stats: StitchStats {
                 frame_count: 0,
@@ -57,26 +152,34 @@ impl Stitcher {
             self.stats.last_append = height;
             self.full_image = Some(Arc::new(frame.clone()));
             self.last_frame = Some(frame.clone());
-            self.last_cols = Some(self.compute_cols(&frame));
+
+            match self.config.algorithm {
+                Algorithm::Fast => {
+                    let gray = rgba_to_gray(&frame);
+                    self.last_fast_index = Some(FastIndex::build(&gray));
+                }
+                _ => {
+                    self.last_cols = Some(self.compute_cols(&frame));
+                }
+            }
             return StitchOutcome::FirstFrame;
         }
 
         let (offset, confidence) = match self.config.algorithm {
+            Algorithm::Fast => self.find_offset_fast(&frame),
             Algorithm::Template => self.find_offset_template(&frame),
             Algorithm::ColSample | Algorithm::Edge => self.find_offset_colsample(&frame),
         };
 
         if confidence > self.config.accept_diff {
-            self.last_frame = Some(frame.clone());
-            self.last_cols = Some(self.compute_cols(&frame));
+            self.update_last_frame(frame);
             return StitchOutcome::NoMatch;
         }
 
         let new_height = if offset > 0 { offset as u32 } else { 0 };
 
         if new_height < self.config.min_append {
-            self.last_frame = Some(frame.clone());
-            self.last_cols = Some(self.compute_cols(&frame));
+            self.update_last_frame(frame);
             self.last_offset = offset;
             return StitchOutcome::NoProgress;
         }
@@ -95,8 +198,7 @@ impl Stitcher {
             .expect("copy slice");
 
         self.full_image = Some(Arc::new(combined));
-        self.last_frame = Some(frame.clone());
-        self.last_cols = Some(self.compute_cols(&frame));
+        self.update_last_frame(frame);
         self.last_offset = offset;
         self.stats.frame_count += 1;
         self.stats.total_height = self.full_image.as_ref().unwrap().height();
@@ -104,11 +206,102 @@ impl Stitcher {
         StitchOutcome::Appended { added: new_height }
     }
 
+    fn update_last_frame(&mut self, frame: RgbaImage) {
+        match self.config.algorithm {
+            Algorithm::Fast => {
+                let gray = rgba_to_gray(&frame);
+                self.last_fast_index = Some(FastIndex::build(&gray));
+            }
+            _ => {
+                self.last_cols = Some(self.compute_cols(&frame));
+            }
+        }
+        self.last_frame = Some(frame);
+    }
+
     fn compute_cols(&self, frame: &RgbaImage) -> ColSamples {
         match self.config.algorithm {
             Algorithm::Edge => col_sampling_edge(frame),
             _ => col_sampling(frame),
         }
+    }
+
+    /// FAST corner + HNSW matching (from snow-shot)
+    fn find_offset_fast(&self, frame: &RgbaImage) -> (i32, f32) {
+        let prev_index = match &self.last_fast_index {
+            Some(idx) => idx,
+            None => return (0, f32::MAX),
+        };
+
+        if prev_index.corners.is_empty() {
+            return (0, f32::MAX);
+        }
+
+        let gray = rgba_to_gray(frame);
+        let curr_index = FastIndex::build(&gray);
+
+        if curr_index.corners.is_empty() {
+            return (0, f32::MAX);
+        }
+
+        // Match features using HNSW
+        let offsets: Vec<i32> = curr_index
+            .descriptors
+            .par_iter()
+            .enumerate()
+            .filter_map(|(i, desc)| {
+                let search_result = prev_index.hnsw.search(desc, 1);
+                if search_result.is_empty() {
+                    return None;
+                }
+                let idx = search_result[0];
+                let dist = euclidean_distance(&prev_index.descriptors[idx], desc);
+
+                if dist > DISTANCE_THRESHOLD {
+                    return None;
+                }
+
+                // Calculate Y offset (vertical scroll)
+                let (_, prev_y) = prev_index.corners[idx];
+                let (_, curr_y) = curr_index.corners[i];
+                let dy = curr_y as i32 - prev_y as i32;
+
+                // For vertical scrolling, we expect negative dy (content moves up)
+                Some(-dy)
+            })
+            .collect();
+
+        if offsets.is_empty() {
+            return (0, f32::MAX);
+        }
+
+        // Frequency voting: find most common offset
+        let mut counts: HashMap<i32, i32> = HashMap::new();
+        for &offset in &offsets {
+            *counts.entry(offset).or_insert(0) += 1;
+        }
+
+        let mut sorted: Vec<_> = counts.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let (best_offset, best_count) = sorted[0];
+        let second_count = sorted.get(1).map(|(_, c)| *c).unwrap_or(0);
+
+        // Confidence checks
+        let min_matches = (curr_index.corners.len() as i32 / 10).max(3);
+        if best_count < min_matches {
+            return (0, f32::MAX);
+        }
+
+        // Avoid ambiguity
+        if best_count < second_count * 2 {
+            return (0, f32::MAX);
+        }
+
+        // Convert count to confidence (lower is better for our interface)
+        let confidence = 1.0 - (best_count as f32 / offsets.len() as f32);
+
+        (best_offset, confidence * 10.0)
     }
 
     fn find_offset_colsample(&self, frame: &RgbaImage) -> (i32, f32) {
@@ -127,7 +320,6 @@ impl Stitcher {
         )
     }
 
-    /// Template matching algorithm (similar to OpenCV TM_CCOEFF_NORMED)
     fn find_offset_template(&self, frame: &RgbaImage) -> (i32, f32) {
         let prev = match &self.last_frame {
             Some(f) => f,
@@ -141,16 +333,13 @@ impl Stitcher {
             return (0, f32::MAX);
         }
 
-        // Template: top 20% of current frame (skip top 5% for sticky headers)
         let skip_top = (h as f32 * 0.05) as u32;
         let template_height = (h as f32 * 0.20) as u32;
         let template = imageops::crop_imm(frame, 0, skip_top, w as u32, template_height).to_image();
-        let template_gray = to_grayscale(&template);
+        let template_gray = to_grayscale_vec(&template);
 
-        // Search in previous frame
-        let prev_gray = to_grayscale(prev);
+        let prev_gray = to_grayscale_vec(prev);
 
-        // Search range: from skip_top to bottom
         let search_start = skip_top as i32;
         let search_end = h - template_height as i32;
 
@@ -161,7 +350,6 @@ impl Stitcher {
         let mut best_offset = 0i32;
         let mut best_score = f32::MIN;
 
-        // Start from predicted offset and expand outward
         let predict = self.last_offset.clamp(0, search_end - search_start);
         let offsets = predict_offset_iter(search_end - search_start, predict);
 
@@ -171,24 +359,20 @@ impl Stitcher {
                 continue;
             }
 
-            let score = ncc_score(&prev_gray, &template_gray, search_y as u32);
+            let score = ncc_score(&prev_gray, &template_gray, search_y as u32, w as u32);
 
             if score > best_score {
                 best_score = score;
                 best_offset = offset;
             }
 
-            // Early termination if we found a very good match
             if best_score > 0.95 {
                 break;
             }
         }
 
-        // Convert NCC score to "diff" (lower is better)
-        // NCC ranges from -1 to 1, we want 0 to be perfect match
         let diff = 1.0 - best_score.max(0.0);
-
-        (best_offset, diff * 10.0) // Scale to match accept_diff threshold
+        (best_offset, diff * 10.0)
     }
 
     pub fn full_image(&self) -> Option<Arc<RgbaImage>> {
@@ -200,26 +384,27 @@ impl Stitcher {
     }
 }
 
-/// Convert image to grayscale (single channel f32)
-fn to_grayscale(img: &RgbaImage) -> Vec<f32> {
+fn rgba_to_gray(img: &RgbaImage) -> GrayImage {
+    GrayImage::from_fn(img.width(), img.height(), |x, y| {
+        let p = img.get_pixel(x, y);
+        let gray = (0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32) as u8;
+        image::Luma([gray])
+    })
+}
+
+fn to_grayscale_vec(img: &RgbaImage) -> Vec<f32> {
     img.pixels()
         .map(|p| 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32)
         .collect()
 }
 
-/// Normalized Cross-Correlation score between template and a region of the image
-fn ncc_score(image_gray: &[f32], template_gray: &[f32], y_offset: u32) -> f32 {
-    let img_h = (image_gray.len() as f32).sqrt() as u32; // Approximate, assuming square-ish
+fn ncc_score(image_gray: &[f32], template_gray: &[f32], y_offset: u32, width: u32) -> f32 {
     let tmpl_len = template_gray.len();
-
     if tmpl_len == 0 {
         return f32::MIN;
     }
 
-    // Calculate template mean
     let tmpl_mean: f32 = template_gray.iter().sum::<f32>() / tmpl_len as f32;
-
-    // Calculate template std dev
     let tmpl_var: f32 = template_gray
         .iter()
         .map(|&v| (v - tmpl_mean).powi(2))
@@ -228,49 +413,40 @@ fn ncc_score(image_gray: &[f32], template_gray: &[f32], y_offset: u32) -> f32 {
     let tmpl_std = tmpl_var.sqrt();
 
     if tmpl_std < 1.0 {
-        return f32::MIN; // Template is too uniform
+        return f32::MIN;
     }
 
-    // For simplicity, we'll use a row-based comparison
-    // This is a simplified NCC that works well for scrolling content
-    let mut sum_img_sq = 0.0f32;
-    let mut img_sum = 0.0f32;
-    let mut count = 0usize;
-
-    let start_idx = (y_offset as usize) * (img_h as usize);
+    let start_idx = (y_offset as usize) * (width as usize);
     let end_idx = start_idx + tmpl_len;
 
     if end_idx > image_gray.len() {
         return f32::MIN;
     }
 
-    for (i, &_tmpl_val) in template_gray.iter().enumerate() {
+    let mut img_sum = 0.0f32;
+    let mut sum_img_sq = 0.0f32;
+
+    for i in 0..tmpl_len {
         let img_val = image_gray[start_idx + i];
         img_sum += img_val;
         sum_img_sq += img_val * img_val;
-        count += 1;
     }
 
-    if count == 0 {
-        return f32::MIN;
-    }
-
-    let img_mean = img_sum / count as f32;
-    let img_var = sum_img_sq / count as f32 - img_mean * img_mean;
+    let img_mean = img_sum / tmpl_len as f32;
+    let img_var = sum_img_sq / tmpl_len as f32 - img_mean * img_mean;
     let img_std = img_var.max(0.0).sqrt();
 
     if img_std < 1.0 {
         return f32::MIN;
     }
 
-    // Recalculate with proper means
     let mut ncc = 0.0f32;
     for (i, &tmpl_val) in template_gray.iter().enumerate() {
         let img_val = image_gray[start_idx + i];
         ncc += (tmpl_val - tmpl_mean) * (img_val - img_mean);
     }
 
-    ncc / (count as f32 * tmpl_std * img_std)
+    ncc / (tmpl_len as f32 * tmpl_std * img_std)
 }
 
 pub fn build_preview(image: &RgbaImage, fixed_width: u32) -> PreviewImage {
@@ -287,7 +463,6 @@ pub fn build_preview(image: &RgbaImage, fixed_width: u32) -> PreviewImage {
     }
 }
 
-/// Column sampling: extract a few columns from the image and average them
 fn col_sampling(img: &RgbaImage) -> ColSamples {
     let w = img.width() as usize;
     let h = img.height() as usize;
@@ -455,7 +630,6 @@ fn compute_col_diff(cols1: &ColSamples, cols2: &ColSamples, offset: i32) -> f32 
     sum / count as f32
 }
 
-/// Column sampling with edge detection for transparent backgrounds
 fn col_sampling_edge(img: &RgbaImage) -> ColSamples {
     let w = img.width() as usize;
     let h = img.height() as usize;

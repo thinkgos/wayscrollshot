@@ -13,6 +13,8 @@ pub enum Algorithm {
     Template,
     /// Edge detection (for transparent backgrounds)
     Edge,
+    /// FAST corner + HNSW index (high accuracy, from snow-shot)
+    Fast,
 }
 
 #[derive(Parser, Debug, Clone)]

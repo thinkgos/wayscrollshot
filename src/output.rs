@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use chrono::Local;
 use image::codecs::png::PngEncoder;
-use image::{ColorType, ImageEncoder, RgbaImage};
+use image::{ExtendedColorType, ImageEncoder, RgbaImage};
 
 pub fn save_image(image: Arc<RgbaImage>, output_path: Option<PathBuf>) -> Result<PathBuf> {
     let path = match output_path {
@@ -70,7 +70,7 @@ pub fn copy_to_clipboard(image: Arc<RgbaImage>) -> Result<()> {
 fn encode_png(image: &RgbaImage) -> Result<Vec<u8>> {
     let mut data = Vec::new();
     let encoder = PngEncoder::new(&mut data);
-    encoder.write_image(image.as_raw(), image.width(), image.height(), ColorType::Rgba8)?;
+    encoder.write_image(image.as_raw(), image.width(), image.height(), ExtendedColorType::Rgba8)?;
     Ok(data)
 }
 
