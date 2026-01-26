@@ -3,6 +3,7 @@ use std::sync::Arc;
 use image::imageops::{self, FilterType};
 use image::{GenericImage, RgbaImage};
 
+use crate::cli::Algorithm;
 use crate::types::{PreviewImage, StitchStats};
 
 pub struct MatchConfig {
@@ -10,7 +11,7 @@ pub struct MatchConfig {
     pub accept_diff: f32,
     pub min_append: u32,
     pub approx_diff: f32,
-    pub edge_mode: bool,
+    pub algorithm: Algorithm,
 }
 
 pub struct Stitcher {
@@ -49,54 +50,33 @@ impl Stitcher {
     }
 
     pub fn push_frame(&mut self, frame: RgbaImage) -> StitchOutcome {
-        let cols = if self.config.edge_mode {
-            col_sampling_edge(&frame)
-        } else {
-            col_sampling(&frame)
-        };
-
         if self.full_image.is_none() {
             let height = frame.height();
             self.stats.frame_count = 1;
             self.stats.total_height = height;
             self.stats.last_append = height;
             self.full_image = Some(Arc::new(frame.clone()));
-            self.last_frame = Some(frame);
-            self.last_cols = Some(cols);
+            self.last_frame = Some(frame.clone());
+            self.last_cols = Some(self.compute_cols(&frame));
             return StitchOutcome::FirstFrame;
         }
 
-        let last_cols = match &self.last_cols {
-            Some(c) => c,
-            None => {
-                self.last_frame = Some(frame);
-                self.last_cols = Some(cols);
-                return StitchOutcome::NoMatch;
-            }
+        let (offset, confidence) = match self.config.algorithm {
+            Algorithm::Template => self.find_offset_template(&frame),
+            Algorithm::ColSample | Algorithm::Edge => self.find_offset_colsample(&frame),
         };
 
-        let (offset, diff) = diff_overlap(
-            last_cols,
-            &cols,
-            self.last_offset,
-            self.config.approx_diff,
-            self.config.min_overlap,
-        );
-
-        if diff > self.config.accept_diff {
-            self.last_frame = Some(frame);
-            self.last_cols = Some(cols);
+        if confidence > self.config.accept_diff {
+            self.last_frame = Some(frame.clone());
+            self.last_cols = Some(self.compute_cols(&frame));
             return StitchOutcome::NoMatch;
         }
 
-        // offset > 0 means new frame scrolled down (normal case)
-        // offset < 0 means new frame scrolled up (reverse scroll)
-        // offset == 0 means no scroll
         let new_height = if offset > 0 { offset as u32 } else { 0 };
 
         if new_height < self.config.min_append {
-            self.last_frame = Some(frame);
-            self.last_cols = Some(cols);
+            self.last_frame = Some(frame.clone());
+            self.last_cols = Some(self.compute_cols(&frame));
             self.last_offset = offset;
             return StitchOutcome::NoProgress;
         }
@@ -108,7 +88,6 @@ impl Stitcher {
             .copy_from(full.as_ref(), 0, 0)
             .expect("copy full image");
 
-        // Copy the new portion from the bottom of the new frame
         let overlap = frame.height().saturating_sub(new_height);
         let slice = imageops::crop_imm(&frame, 0, overlap, frame.width(), new_height).to_image();
         combined
@@ -116,13 +95,100 @@ impl Stitcher {
             .expect("copy slice");
 
         self.full_image = Some(Arc::new(combined));
-        self.last_frame = Some(frame);
-        self.last_cols = Some(cols);
+        self.last_frame = Some(frame.clone());
+        self.last_cols = Some(self.compute_cols(&frame));
         self.last_offset = offset;
         self.stats.frame_count += 1;
         self.stats.total_height = self.full_image.as_ref().unwrap().height();
         self.stats.last_append = new_height;
         StitchOutcome::Appended { added: new_height }
+    }
+
+    fn compute_cols(&self, frame: &RgbaImage) -> ColSamples {
+        match self.config.algorithm {
+            Algorithm::Edge => col_sampling_edge(frame),
+            _ => col_sampling(frame),
+        }
+    }
+
+    fn find_offset_colsample(&self, frame: &RgbaImage) -> (i32, f32) {
+        let cols = self.compute_cols(frame);
+        let last_cols = match &self.last_cols {
+            Some(c) => c,
+            None => return (0, f32::MAX),
+        };
+
+        diff_overlap(
+            last_cols,
+            &cols,
+            self.last_offset,
+            self.config.approx_diff,
+            self.config.min_overlap,
+        )
+    }
+
+    /// Template matching algorithm (similar to OpenCV TM_CCOEFF_NORMED)
+    fn find_offset_template(&self, frame: &RgbaImage) -> (i32, f32) {
+        let prev = match &self.last_frame {
+            Some(f) => f,
+            None => return (0, f32::MAX),
+        };
+
+        let h = prev.height() as i32;
+        let w = prev.width() as i32;
+
+        if h < 100 || w < 50 {
+            return (0, f32::MAX);
+        }
+
+        // Template: top 20% of current frame (skip top 5% for sticky headers)
+        let skip_top = (h as f32 * 0.05) as u32;
+        let template_height = (h as f32 * 0.20) as u32;
+        let template = imageops::crop_imm(frame, 0, skip_top, w as u32, template_height).to_image();
+        let template_gray = to_grayscale(&template);
+
+        // Search in previous frame
+        let prev_gray = to_grayscale(prev);
+
+        // Search range: from skip_top to bottom
+        let search_start = skip_top as i32;
+        let search_end = h - template_height as i32;
+
+        if search_end <= search_start {
+            return (0, f32::MAX);
+        }
+
+        let mut best_offset = 0i32;
+        let mut best_score = f32::MIN;
+
+        // Start from predicted offset and expand outward
+        let predict = self.last_offset.clamp(0, search_end - search_start);
+        let offsets = predict_offset_iter(search_end - search_start, predict);
+
+        for offset in offsets {
+            let search_y = search_start + offset;
+            if search_y < 0 || search_y + template_height as i32 > h {
+                continue;
+            }
+
+            let score = ncc_score(&prev_gray, &template_gray, search_y as u32);
+
+            if score > best_score {
+                best_score = score;
+                best_offset = offset;
+            }
+
+            // Early termination if we found a very good match
+            if best_score > 0.95 {
+                break;
+            }
+        }
+
+        // Convert NCC score to "diff" (lower is better)
+        // NCC ranges from -1 to 1, we want 0 to be perfect match
+        let diff = 1.0 - best_score.max(0.0);
+
+        (best_offset, diff * 10.0) // Scale to match accept_diff threshold
     }
 
     pub fn full_image(&self) -> Option<Arc<RgbaImage>> {
@@ -132,6 +198,79 @@ impl Stitcher {
     pub fn stats(&self) -> StitchStats {
         self.stats.clone()
     }
+}
+
+/// Convert image to grayscale (single channel f32)
+fn to_grayscale(img: &RgbaImage) -> Vec<f32> {
+    img.pixels()
+        .map(|p| 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32)
+        .collect()
+}
+
+/// Normalized Cross-Correlation score between template and a region of the image
+fn ncc_score(image_gray: &[f32], template_gray: &[f32], y_offset: u32) -> f32 {
+    let img_h = (image_gray.len() as f32).sqrt() as u32; // Approximate, assuming square-ish
+    let tmpl_len = template_gray.len();
+
+    if tmpl_len == 0 {
+        return f32::MIN;
+    }
+
+    // Calculate template mean
+    let tmpl_mean: f32 = template_gray.iter().sum::<f32>() / tmpl_len as f32;
+
+    // Calculate template std dev
+    let tmpl_var: f32 = template_gray
+        .iter()
+        .map(|&v| (v - tmpl_mean).powi(2))
+        .sum::<f32>()
+        / tmpl_len as f32;
+    let tmpl_std = tmpl_var.sqrt();
+
+    if tmpl_std < 1.0 {
+        return f32::MIN; // Template is too uniform
+    }
+
+    // For simplicity, we'll use a row-based comparison
+    // This is a simplified NCC that works well for scrolling content
+    let mut sum_img_sq = 0.0f32;
+    let mut img_sum = 0.0f32;
+    let mut count = 0usize;
+
+    let start_idx = (y_offset as usize) * (img_h as usize);
+    let end_idx = start_idx + tmpl_len;
+
+    if end_idx > image_gray.len() {
+        return f32::MIN;
+    }
+
+    for (i, &_tmpl_val) in template_gray.iter().enumerate() {
+        let img_val = image_gray[start_idx + i];
+        img_sum += img_val;
+        sum_img_sq += img_val * img_val;
+        count += 1;
+    }
+
+    if count == 0 {
+        return f32::MIN;
+    }
+
+    let img_mean = img_sum / count as f32;
+    let img_var = sum_img_sq / count as f32 - img_mean * img_mean;
+    let img_std = img_var.max(0.0).sqrt();
+
+    if img_std < 1.0 {
+        return f32::MIN;
+    }
+
+    // Recalculate with proper means
+    let mut ncc = 0.0f32;
+    for (i, &tmpl_val) in template_gray.iter().enumerate() {
+        let img_val = image_gray[start_idx + i];
+        ncc += (tmpl_val - tmpl_mean) * (img_val - img_mean);
+    }
+
+    ncc / (count as f32 * tmpl_std * img_std)
 }
 
 pub fn build_preview(image: &RgbaImage, fixed_width: u32) -> PreviewImage {
@@ -149,7 +288,6 @@ pub fn build_preview(image: &RgbaImage, fixed_width: u32) -> PreviewImage {
 }
 
 /// Column sampling: extract a few columns from the image and average them
-/// Returns a (height, num_groups) matrix where each row is the averaged grayscale values
 fn col_sampling(img: &RgbaImage) -> ColSamples {
     let w = img.width() as usize;
     let h = img.height() as usize;
@@ -158,10 +296,6 @@ fn col_sampling(img: &RgbaImage) -> ColSamples {
         return vec![];
     }
 
-    // Sample 3 groups of columns (like the Python implementation)
-    // Group 1: left region (20 to w/4)
-    // Group 2: middle region (w/2 to 5w/8)
-    // Group 3: right region (6w/8 to 7w/8)
     let groups: Vec<Vec<usize>> = vec![
         linspace(20.min(w - 1), w / 4, 3),
         linspace(w / 2, 5 * w / 8, 3),
@@ -177,7 +311,6 @@ fn col_sampling(img: &RgbaImage) -> ColSamples {
             for &x in cols {
                 if x < w {
                     let pixel = img.get_pixel(x as u32, y as u32);
-                    // Convert to grayscale: 0.299*R + 0.587*G + 0.114*B
                     let gray = 0.299 * pixel[0] as f32
                         + 0.587 * pixel[1] as f32
                         + 0.114 * pixel[2] as f32;
@@ -192,7 +325,6 @@ fn col_sampling(img: &RgbaImage) -> ColSamples {
     result
 }
 
-/// Generate evenly spaced values
 fn linspace(start: usize, end: usize, n: usize) -> Vec<usize> {
     if n == 0 {
         return vec![];
@@ -206,33 +338,22 @@ fn linspace(start: usize, end: usize, n: usize) -> Vec<usize> {
         .collect()
 }
 
-/// Generate search offsets starting from prediction, expanding outward
-/// e.g., predict=50, max=100 -> [50, 51, 49, 52, 48, ...]
 fn predict_offset_iter(max: i32, predict: i32) -> Vec<i32> {
-    let p = predict.clamp(-max, max);
-    let mut result = vec![0i32];
+    let p = predict.clamp(0, max);
+    let mut result = vec![p];
 
     for delta in 1..=max {
         if p + delta <= max {
             result.push(p + delta);
         }
-        if p - delta >= -max {
+        if p - delta >= 0 {
             result.push(p - delta);
-        }
-    }
-
-    // Add remaining values
-    for i in -max..=max {
-        if !result.contains(&i) {
-            result.push(i);
         }
     }
 
     result
 }
 
-/// Find the overlap between two column samples
-/// Returns (offset, diff) where offset is the scroll distance
 fn diff_overlap(
     cols1: &ColSamples,
     cols2: &ColSamples,
@@ -258,7 +379,6 @@ fn diff_overlap(
             best = (offset, diff);
         }
 
-        // Early termination like the Python implementation
         if best.1 < approx_diff {
             approach_count += 1;
             if approach_count > 10 {
@@ -273,7 +393,6 @@ fn diff_overlap(
     best
 }
 
-/// Compute mean absolute difference between cols1[offset:] and cols2[:-offset] (or vice versa)
 fn compute_col_diff(cols1: &ColSamples, cols2: &ColSamples, offset: i32) -> f32 {
     let h1 = cols1.len();
     let h2 = cols2.len();
@@ -291,7 +410,6 @@ fn compute_col_diff(cols1: &ColSamples, cols2: &ColSamples, offset: i32) -> f32 
     let mut count = 0usize;
 
     if offset == 0 {
-        // Compare entire columns
         let len = h1.min(h2);
         for y in 0..len {
             for g in 0..num_groups {
@@ -301,8 +419,6 @@ fn compute_col_diff(cols1: &ColSamples, cols2: &ColSamples, offset: i32) -> f32 
             }
         }
     } else if offset > 0 {
-        // cols1[offset:] vs cols2[:-offset]
-        // This means: new frame scrolled down by `offset` pixels
         let offset_u = offset as usize;
         let len = (h1 - offset_u).min(h2 - offset_u);
         for i in 0..len {
@@ -317,8 +433,6 @@ fn compute_col_diff(cols1: &ColSamples, cols2: &ColSamples, offset: i32) -> f32 
             }
         }
     } else {
-        // offset < 0: cols1[:offset] vs cols2[-offset:]
-        // This means: new frame scrolled up (reverse scroll)
         let offset_u = (-offset) as usize;
         let len = (h1 - offset_u).min(h2 - offset_u);
         for i in 0..len {
@@ -342,7 +456,6 @@ fn compute_col_diff(cols1: &ColSamples, cols2: &ColSamples, offset: i32) -> f32 
 }
 
 /// Column sampling with edge detection for transparent backgrounds
-/// Uses vertical gradient (Sobel-like) to detect edges instead of raw pixel values
 fn col_sampling_edge(img: &RgbaImage) -> ColSamples {
     let w = img.width() as usize;
     let h = img.height() as usize;
@@ -351,7 +464,6 @@ fn col_sampling_edge(img: &RgbaImage) -> ColSamples {
         return vec![];
     }
 
-    // Sample 3 groups of columns
     let groups: Vec<Vec<usize>> = vec![
         linspace(20.min(w - 1), w / 4, 3),
         linspace(w / 2, 5 * w / 8, 3),
@@ -366,11 +478,9 @@ fn col_sampling_edge(img: &RgbaImage) -> ColSamples {
             let mut count = 0;
             for &x in cols {
                 if x < w {
-                    // Get current and previous row pixels
                     let curr = img.get_pixel(x as u32, y as u32);
                     let prev = img.get_pixel(x as u32, (y - 1) as u32);
 
-                    // Compute grayscale values
                     let gray_curr = 0.299 * curr[0] as f32
                         + 0.587 * curr[1] as f32
                         + 0.114 * curr[2] as f32;
@@ -378,7 +488,6 @@ fn col_sampling_edge(img: &RgbaImage) -> ColSamples {
                         + 0.587 * prev[1] as f32
                         + 0.114 * prev[2] as f32;
 
-                    // Vertical gradient (edge strength)
                     let edge = (gray_curr - gray_prev).abs();
                     sum += edge;
                     count += 1;
@@ -386,7 +495,6 @@ fn col_sampling_edge(img: &RgbaImage) -> ColSamples {
             }
             result[y][group_idx] = if count > 0 { sum / count as f32 } else { 0.0 };
         }
-        // First row has no gradient, copy from second row
         if h > 1 {
             result[0][group_idx] = result[1][group_idx];
         }

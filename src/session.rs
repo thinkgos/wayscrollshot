@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
 
 use crate::capture::{capture_frame, select_region};
-use crate::cli::Args;
+use crate::cli::{Algorithm, Args};
 use crate::overlay::LayerShellOverlay;
 use crate::output::{copy_to_clipboard, save_image};
 use crate::region_overlay::RegionOverlay;
@@ -44,14 +44,14 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     let preview_tx = layer_overlay.as_ref().and_then(|o| o.sender());
-    let edge_mode = args.edge_mode;
+    let algorithm = args.algorithm;
     let worker = spawn_capture_worker(
         region,
         control.clone(),
         state.clone(),
         preview_tx,
         args.preview_width,
-        edge_mode,
+        algorithm,
     );
 
     let result = run_session(
@@ -151,7 +151,7 @@ fn spawn_capture_worker(
     state: Arc<Mutex<StitchState>>,
     preview_tx: Option<mpsc::Sender<LayerMessage>>,
     preview_width: u32,
-    edge_mode: bool,
+    algorithm: Algorithm,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let config = MatchConfig {
@@ -159,7 +159,7 @@ fn spawn_capture_worker(
             accept_diff: 5.0,
             min_append: 15,
             approx_diff: 1.0,
-            edge_mode,
+            algorithm,
         };
         let mut stitcher = Stitcher::new(config);
 

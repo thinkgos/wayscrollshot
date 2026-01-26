@@ -1,8 +1,19 @@
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use crate::constants::PREVIEW_MAX_WIDTH;
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum Algorithm {
+    /// Column sampling (fast, good for most cases)
+    #[default]
+    ColSample,
+    /// Template matching (slower, more accurate)
+    Template,
+    /// Edge detection (for transparent backgrounds)
+    Edge,
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "wayscrollshot")]
@@ -28,9 +39,9 @@ pub struct Args {
     #[arg(long)]
     pub no_border: bool,
 
-    /// Use edge detection for transparent backgrounds (terminals, etc.)
-    #[arg(long)]
-    pub edge_mode: bool,
+    /// Stitching algorithm to use
+    #[arg(short, long, value_enum, default_value_t = Algorithm::ColSample)]
+    pub algorithm: Algorithm,
 }
 
 impl Args {

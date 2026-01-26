@@ -121,8 +121,10 @@ wayscrollshot --no-preview
 # Disable region border overlay
 wayscrollshot --no-border
 
-# Use edge detection mode for transparent terminals
-wayscrollshot --edge-mode
+# Use different stitching algorithms
+wayscrollshot -a col-sample  # Default: fast column sampling
+wayscrollshot -a template    # Template matching (more accurate)
+wayscrollshot -a edge        # Edge detection (for transparent backgrounds)
 ```
 
 ### Options
@@ -134,7 +136,7 @@ wayscrollshot --edge-mode
 | `-c, --clipboard` | Copy to clipboard instead of saving | false |
 | `--no-preview` | Disable preview window | false |
 | `--no-border` | Disable region border overlay | false |
-| `--edge-mode` | Use edge detection for transparent backgrounds | false |
+| `-a, --algorithm <ALG>` | Stitching algorithm: `col-sample`, `template`, `edge` | col-sample |
 
 ### Controls
 

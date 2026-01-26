@@ -121,8 +121,10 @@ wayscrollshot --no-preview
 # 禁用区域边框覆盖层
 wayscrollshot --no-border
 
-# 透明终端使用边缘检测模式
-wayscrollshot --edge-mode
+# 使用不同的拼接算法
+wayscrollshot -a col-sample  # 默认：快速列采样
+wayscrollshot -a template    # 模板匹配（更精确）
+wayscrollshot -a edge        # 边缘检测（适用于透明背景）
 ```
 
 ### 选项
@@ -134,7 +136,7 @@ wayscrollshot --edge-mode
 | `-c, --clipboard` | 复制到剪贴板而非保存 | false |
 | `--no-preview` | 禁用预览窗口 | false |
 | `--no-border` | 禁用区域边框覆盖层 | false |
-| `--edge-mode` | 使用边缘检测（适用于透明背景） | false |
+| `-a, --algorithm <ALG>` | 拼接算法：`col-sample`、`template`、`edge` | col-sample |
 
 ### 控制方式
 
