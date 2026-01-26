@@ -1,6 +1,5 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
@@ -50,7 +49,6 @@ pub fn run(args: Args) -> Result<()> {
         control.clone(),
         state.clone(),
         preview_tx,
-        args.interval,
         args.preview_width,
     );
 
@@ -150,26 +148,24 @@ fn spawn_capture_worker(
     control: Arc<Control>,
     state: Arc<Mutex<StitchState>>,
     preview_tx: Option<mpsc::Sender<LayerMessage>>,
-    interval_ms: u64,
     preview_width: u32,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let config = MatchConfig {
-            min_overlap: 100,      // Minimum overlap in pixels
-            accept_diff: 5.0,      // Max acceptable MAD (grayscale 0-255)
-            min_append: 15,        // Minimum pixels to append
-            approx_diff: 1.0,      // Early stop threshold
+            min_overlap: 100,
+            accept_diff: 5.0,
+            min_append: 15,
+            approx_diff: 1.0,
         };
         let mut stitcher = Stitcher::new(config);
 
         while control.is_running() {
             if control.is_paused() {
                 update_status(&state, "Paused".to_string(), None, None, None);
-                thread::sleep(Duration::from_millis(120));
+                std::thread::sleep(std::time::Duration::from_millis(50));
                 continue;
             }
 
-            let start = Instant::now();
             match capture_frame(&region) {
                 Ok(frame) => {
                     let outcome = stitcher.push_frame(frame);
@@ -221,11 +217,6 @@ fn spawn_capture_worker(
                         Some(err.to_string()),
                     );
                 }
-            }
-
-            let elapsed = start.elapsed();
-            if elapsed < Duration::from_millis(interval_ms) {
-                thread::sleep(Duration::from_millis(interval_ms) - elapsed);
             }
         }
     })
