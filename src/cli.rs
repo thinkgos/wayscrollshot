@@ -5,10 +5,10 @@ use clap::Parser;
 use crate::constants::PREVIEW_MAX_WIDTH;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "long-shot")]
+#[command(name = "wayscrollshot")]
 #[command(about = "A scrolling screenshot tool for Wayland", long_about = None)]
 pub struct Args {
-    /// Output file path (default: ~/Pictures/long-shot-<timestamp>.png)
+    /// Output file path (default: ~/Pictures/wayscrollshot-<timestamp>.png)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 

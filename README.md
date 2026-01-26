@@ -1,43 +1,189 @@
-# Long Shot (Rust)
+# wayscrollshot
 
-Minimal long screenshot tool for Linux that stitches while you scroll.
+A scrolling screenshot tool for Wayland that captures and stitches images in real-time as you scroll.
 
-## Requirements
+[中文文档](README_CN.md)
 
-- `slurp` for region selection
-- `grim` for capture
-- `wl-copy` (Wayland) or `xclip` (X11) for clipboard copy
+## Features
 
-## Build
+- Real-time preview with automatic stitching
+- Column sampling algorithm for fast and accurate overlap detection
+- Rounded button UI with hover effects (powered by tiny-skia)
+- Keyboard shortcuts and mouse control
+- Save to file or copy to clipboard
+- Supports reverse scrolling
+
+## How It Works
+
+### Architecture
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│   Capture   │────>│   Stitcher   │────>│   Preview   │
+│   (grim)    │     │ (col-sample) │     │ (layer-shell)│
+└─────────────┘     └──────────────┘     └─────────────┘
+```
+
+### Column Sampling Algorithm
+
+Instead of comparing entire images pixel-by-pixel, wayscrollshot uses a column sampling approach inspired by [screenshot-splicing](https://github.com/aspect-ratio/screenshot-splicing):
+
+1. **Sample 3 column groups** from each frame:
+   - Left region (20 to width/4)
+   - Middle region (width/2 to 5*width/8)
+   - Right region (6*width/8 to 7*width/8)
+
+2. **Convert to grayscale** and average each group
+
+3. **Search for overlap** using Mean Absolute Difference (MAD):
+   - Start from the predicted offset (based on previous scroll)
+   - Expand search outward: `[p, p+1, p-1, p+2, p-2, ...]`
+   - Early termination when MAD < threshold
+
+4. **Append new content** to the stitched image
+
+**Complexity**: O(9 * height) instead of O(width * height) - a significant speedup.
+
+### Overlap Detection
+
+```
+Frame 1 (previous):          Frame 2 (current):
+┌────────────────┐           ┌────────────────┐
+│    Content A   │           │    Content B   │
+│                │           │                │
+│    Content B   │ <──────── │    Content B   │  (overlap)
+│                │           │                │
+│    Content C   │           │    Content C   │
+└────────────────┘           │                │
+                             │    Content D   │  (new)
+                             └────────────────┘
+```
+
+The algorithm finds where Frame 2's top matches Frame 1's content, then appends only the new portion.
+
+## Dependencies
+
+### Runtime Dependencies
+
+| Tool | Purpose | Required |
+|------|---------|----------|
+| `slurp` | Region selection | Yes |
+| `grim` | Screen capture | Yes |
+| `wl-copy` | Clipboard (Wayland) | For clipboard feature |
+| `xclip` | Clipboard (X11 fallback) | Alternative |
+
+### Build Dependencies
+
+| Crate | Purpose |
+|-------|---------|
+| `smithay-client-toolkit` | Wayland client library |
+| `wayland-client` | Wayland protocol bindings |
+| `tiny-skia` | 2D graphics (rounded buttons) |
+| `image` | Image processing and resizing |
+| `clap` | Command-line argument parsing |
+| `anyhow` | Error handling |
+| `chrono` | Timestamp for filenames |
+| `log` / `env_logger` | Logging |
+
+## Installation
+
+### From Source
 
 ```bash
+# Install runtime dependencies (Arch Linux)
+sudo pacman -S slurp grim wl-clipboard
+
+# Build
 cargo build --release
+
+# Install (optional)
+cp target/release/wayscrollshot ~/.local/bin/
 ```
 
-## Run
+## Usage
 
 ```bash
-cargo run --release
+# Basic usage
+wayscrollshot
+
+# Save to specific file
+wayscrollshot -o ~/screenshot.png
+
+# Copy to clipboard instead of saving
+wayscrollshot -c
+
+# Custom preview width
+wayscrollshot -w 320
+
+# Disable preview window
+wayscrollshot --no-preview
+
+# Disable region border overlay
+wayscrollshot --no-border
 ```
 
-## Flow
+### Options
 
-1. Select a capture region with slurp.
-2. A layer-shell overlay appears in the top-right with a preview + control bar.
-3. Scroll the target app; the preview grows as new frames are stitched.
-4. Click the control bar: `S` save, `C` copy, `P` pause/resume, `X` cancel.
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-o, --output <PATH>` | Output file path | `~/Pictures/wayscrollshot-<timestamp>.png` |
+| `-w, --preview-width <PX>` | Preview width in pixels | 280 |
+| `-c, --clipboard` | Copy to clipboard instead of saving | false |
+| `--no-preview` | Disable preview window | false |
+| `--no-border` | Disable region border overlay | false |
 
-## Hotkeys
+### Controls
 
-- `S` save and exit (overlay focused)
-- `C` copy and exit (overlay focused)
-- `Esc` or `Q` cancel and exit (overlay focused)
-- `Space` pause or resume capture (overlay focused)
+**Mouse:**
+- Click buttons in the control bar
 
-## Notes
+**Keyboard (when overlay is focused):**
+| Key | Action |
+|-----|--------|
+| `S` | Save and exit |
+| `C` | Copy to clipboard and exit |
+| `Space` | Pause/Resume capture |
+| `Q` / `Esc` | Cancel and exit |
 
-- Wayland only; X11 is not supported.
-- The preview uses `wlr-layer-shell-unstable-v1` (wlroots-based compositors).
-- Only the control bar accepts clicks; the preview stays click-through.
-- Best results if each scroll step leaves some overlap with the previous view.
-- Default output is `~/Pictures` if it exists, otherwise `$HOME`.
+## Limitations
+
+1. **Wayland only**: X11 is not supported. The tool uses `wlr-layer-shell-unstable-v1` protocol.
+
+2. **wlroots-based compositors**: Works on Sway, Hyprland, river, etc. May not work on GNOME/KDE Wayland.
+
+3. **Overlap requirement**: Each scroll step must leave some overlap with the previous view. Very fast scrolling may cause stitching failures.
+
+4. **Static content assumption**: The algorithm assumes the scrolling content is static. Dynamic content (animations, videos) will cause artifacts.
+
+5. **Vertical scrolling only**: Horizontal scrolling is not currently supported.
+
+6. **Fixed header/footer**: If the page has fixed headers or footers, they will be captured repeatedly. Consider selecting a region that excludes them.
+
+## Troubleshooting
+
+### "slurp selection failed"
+- Ensure `slurp` is installed and in PATH
+- Check if you're running on Wayland
+
+### "layer-shell not available"
+- Your compositor doesn't support `wlr-layer-shell-unstable-v1`
+- Try a wlroots-based compositor (Sway, Hyprland)
+
+### "No overlap match"
+- Scroll more slowly
+- Ensure there's visible overlap between frames
+- Avoid scrolling through completely different content
+
+### Preview not updating
+- Check if the capture region is correct
+- Try running with `RUST_LOG=debug` for more info
+
+## License
+
+MIT
+
+## Acknowledgments
+
+- [screenshot-splicing](https://github.com/aspect-ratio/screenshot-splicing) - Column sampling algorithm inspiration
+- [smithay-client-toolkit](https://github.com/Smithay/client-toolkit) - Wayland client library
+- [tiny-skia](https://github.com/ArtRand/tiny-skia) - 2D graphics library

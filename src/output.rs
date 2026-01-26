@@ -21,7 +21,7 @@ pub fn save_image(image: Arc<RgbaImage>, output_path: Option<PathBuf>) -> Result
         None => {
             let output_dir = default_output_dir();
             std::fs::create_dir_all(&output_dir)?;
-            let filename = format!("long-shot-{}.png", Local::now().format("%Y%m%d-%H%M%S"));
+            let filename = format!("wayscrollshot-{}.png", Local::now().format("%Y%m%d-%H%M%S"));
             output_dir.join(filename)
         }
     };

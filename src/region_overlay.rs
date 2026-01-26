@@ -275,7 +275,7 @@ fn run_region_overlay(
         &qh,
         surface,
         Layer::Overlay,
-        Some("long-shot-region"),
+        Some("wayscrollshot-region"),
         None,
     );
 

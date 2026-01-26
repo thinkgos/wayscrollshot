@@ -625,7 +625,7 @@ fn run_layer_shell_overlay(
         &qh,
         surface,
         Layer::Overlay,
-        Some("long-shot-overlay"),
+        Some("wayscrollshot-overlay"),
         None,
     );
 
