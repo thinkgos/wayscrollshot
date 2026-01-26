@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(RUST_LOG=debug timeout 2 ./target/release/long-shot:*)"
-    ]
-  }
-}

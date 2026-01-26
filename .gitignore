@@ -4,3 +4,12 @@ Cargo.lock
 *.swo
 *~
 .DS_Store
+
+# Claude Code
+.claude/
+
+# Reference projects
+screenshot-splicing/
+
+# Misc
+qs.py
