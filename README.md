@@ -120,6 +120,9 @@ wayscrollshot --no-preview
 
 # Disable region border overlay
 wayscrollshot --no-border
+
+# Use edge detection mode for transparent terminals
+wayscrollshot --edge-mode
 ```
 
 ### Options
@@ -131,6 +134,7 @@ wayscrollshot --no-border
 | `-c, --clipboard` | Copy to clipboard instead of saving | false |
 | `--no-preview` | Disable preview window | false |
 | `--no-border` | Disable region border overlay | false |
+| `--edge-mode` | Use edge detection for transparent backgrounds | false |
 
 ### Controls
 

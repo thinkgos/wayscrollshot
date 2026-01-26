@@ -27,6 +27,10 @@ pub struct Args {
     /// Disable region border overlay
     #[arg(long)]
     pub no_border: bool,
+
+    /// Use edge detection for transparent backgrounds (terminals, etc.)
+    #[arg(long)]
+    pub edge_mode: bool,
 }
 
 impl Args {

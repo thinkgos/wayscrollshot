@@ -120,6 +120,9 @@ wayscrollshot --no-preview
 
 # 禁用区域边框覆盖层
 wayscrollshot --no-border
+
+# 透明终端使用边缘检测模式
+wayscrollshot --edge-mode
 ```
 
 ### 选项
@@ -131,6 +134,7 @@ wayscrollshot --no-border
 | `-c, --clipboard` | 复制到剪贴板而非保存 | false |
 | `--no-preview` | 禁用预览窗口 | false |
 | `--no-border` | 禁用区域边框覆盖层 | false |
+| `--edge-mode` | 使用边缘检测（适用于透明背景） | false |
 
 ### 控制方式
 

@@ -10,6 +10,7 @@ pub struct MatchConfig {
     pub accept_diff: f32,
     pub min_append: u32,
     pub approx_diff: f32,
+    pub edge_mode: bool,
 }
 
 pub struct Stitcher {
@@ -48,7 +49,11 @@ impl Stitcher {
     }
 
     pub fn push_frame(&mut self, frame: RgbaImage) -> StitchOutcome {
-        let cols = col_sampling(&frame);
+        let cols = if self.config.edge_mode {
+            col_sampling_edge(&frame)
+        } else {
+            col_sampling(&frame)
+        };
 
         if self.full_image.is_none() {
             let height = frame.height();
@@ -334,4 +339,58 @@ fn compute_col_diff(cols1: &ColSamples, cols2: &ColSamples, offset: i32) -> f32 
     }
 
     sum / count as f32
+}
+
+/// Column sampling with edge detection for transparent backgrounds
+/// Uses vertical gradient (Sobel-like) to detect edges instead of raw pixel values
+fn col_sampling_edge(img: &RgbaImage) -> ColSamples {
+    let w = img.width() as usize;
+    let h = img.height() as usize;
+
+    if w == 0 || h < 2 {
+        return vec![];
+    }
+
+    // Sample 3 groups of columns
+    let groups: Vec<Vec<usize>> = vec![
+        linspace(20.min(w - 1), w / 4, 3),
+        linspace(w / 2, 5 * w / 8, 3),
+        linspace(6 * w / 8, 7 * w / 8, 3),
+    ];
+
+    let mut result: Vec<Vec<f32>> = vec![vec![0.0; groups.len()]; h];
+
+    for (group_idx, cols) in groups.iter().enumerate() {
+        for y in 1..h {
+            let mut sum = 0.0f32;
+            let mut count = 0;
+            for &x in cols {
+                if x < w {
+                    // Get current and previous row pixels
+                    let curr = img.get_pixel(x as u32, y as u32);
+                    let prev = img.get_pixel(x as u32, (y - 1) as u32);
+
+                    // Compute grayscale values
+                    let gray_curr = 0.299 * curr[0] as f32
+                        + 0.587 * curr[1] as f32
+                        + 0.114 * curr[2] as f32;
+                    let gray_prev = 0.299 * prev[0] as f32
+                        + 0.587 * prev[1] as f32
+                        + 0.114 * prev[2] as f32;
+
+                    // Vertical gradient (edge strength)
+                    let edge = (gray_curr - gray_prev).abs();
+                    sum += edge;
+                    count += 1;
+                }
+            }
+            result[y][group_idx] = if count > 0 { sum / count as f32 } else { 0.0 };
+        }
+        // First row has no gradient, copy from second row
+        if h > 1 {
+            result[0][group_idx] = result[1][group_idx];
+        }
+    }
+
+    result
 }
