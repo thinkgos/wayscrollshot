@@ -155,10 +155,10 @@ fn spawn_capture_worker(
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let config = MatchConfig {
-            match_width: 240,
-            min_overlap_full: 30,
-            accept_diff: 12.0,  // sqrt(SSD / pixel_count) threshold
-            min_append_full: 20,
+            min_overlap: 100,      // Minimum overlap in pixels
+            accept_diff: 5.0,      // Max acceptable MAD (grayscale 0-255)
+            min_append: 15,        // Minimum pixels to append
+            approx_diff: 1.0,      // Early stop threshold
         };
         let mut stitcher = Stitcher::new(config);
 
