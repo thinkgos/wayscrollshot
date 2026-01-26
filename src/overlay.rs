@@ -25,6 +25,7 @@ use smithay_client_toolkit::{
     },
     shm::{slot::SlotPool, Shm, ShmHandler},
 };
+use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Transform};
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_region, wl_seat, wl_shm, wl_surface},
@@ -675,25 +676,26 @@ fn draw_control_bar(canvas: &mut [u8], width: u32, height: u32, bar_y: u32, paus
         return;
     }
 
+    // Create a pixmap for the control bar
+    let mut pixmap = match Pixmap::new(width, bar_height) {
+        Some(p) => p,
+        None => return,
+    };
+
     let segment = (width / CONTROL_BUTTON_COUNT).max(1);
-    let mut start_x = 0;
-    let scale = (bar_height.saturating_sub(4) / 7).max(1);
+    let padding = 2.0;
+    let radius = 6.0;
 
     for index in 0..CONTROL_BUTTON_COUNT {
-        if start_x >= width {
-            break;
-        }
-        let mut end_x = if index == CONTROL_BUTTON_COUNT - 1 {
+        let start_x = index * segment;
+        let end_x = if index == CONTROL_BUTTON_COUNT - 1 {
             width
         } else {
-            start_x.saturating_add(segment)
+            (index + 1) * segment
         };
-        if end_x > width {
-            end_x = width;
-        }
         let button_width = end_x.saturating_sub(start_x);
         if button_width == 0 {
-            break;
+            continue;
         }
 
         let color = match index {
@@ -708,39 +710,98 @@ fn draw_control_bar(canvas: &mut [u8], width: u32, height: u32, bar_y: u32, paus
             }
             _ => COLOR_CANCEL,
         };
-        fill_rect(
-            canvas,
-            width,
-            height,
-            start_x,
-            bar_y,
-            button_width,
-            bar_height,
-            color,
-        );
 
+        // Draw rounded rectangle button
+        let x = start_x as f32 + padding;
+        let y = padding;
+        let w = button_width as f32 - padding * 2.0;
+        let h = bar_height as f32 - padding * 2.0;
+
+        if let Some(path) = rounded_rect_path(x, y, w, h, radius) {
+            let mut paint = Paint::default();
+            paint.set_color(Color::from_rgba8(color[0], color[1], color[2], color[3]));
+            paint.anti_alias = true;
+            pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        }
+
+        // Draw label
         let label = match index {
             0 => 'S',
             1 => 'C',
             2 => 'P',
             _ => 'X',
         };
+        let scale = ((bar_height as f32 - 8.0) / 7.0).max(1.0) as u32;
         let glyph_width = 5 * scale;
         let glyph_height = 7 * scale;
-        let label_x = start_x + button_width.saturating_sub(glyph_width) / 2;
-        let label_y = bar_y + (bar_height.saturating_sub(glyph_height)) / 2;
-        draw_glyph(
-            canvas,
-            width,
-            height,
-            label_x,
-            label_y,
-            scale,
-            label,
-            COLOR_LABEL,
-        );
+        let label_x = start_x + (button_width.saturating_sub(glyph_width)) / 2;
+        let label_y = (bar_height.saturating_sub(glyph_height)) / 2;
+        draw_glyph_to_pixmap(&mut pixmap, label_x, label_y, scale, label, COLOR_LABEL);
+    }
 
-        start_x = end_x;
+    // Copy pixmap to canvas at bar_y position
+    let pixmap_data = pixmap.data();
+    for y in 0..bar_height {
+        let dst_y = bar_y + y;
+        if dst_y >= height {
+            break;
+        }
+        let src_row = (y * width * 4) as usize;
+        let dst_row = (dst_y * width * 4) as usize;
+        for x in 0..width {
+            let src_idx = src_row + (x * 4) as usize;
+            let dst_idx = dst_row + (x * 4) as usize;
+            if src_idx + 3 < pixmap_data.len() && dst_idx + 3 < canvas.len() {
+                // tiny-skia uses RGBA, Wayland uses BGRA (ARGB8888)
+                let a = pixmap_data[src_idx + 3];
+                if a > 0 {
+                    canvas[dst_idx] = pixmap_data[src_idx + 2]; // B
+                    canvas[dst_idx + 1] = pixmap_data[src_idx + 1]; // G
+                    canvas[dst_idx + 2] = pixmap_data[src_idx]; // R
+                    canvas[dst_idx + 3] = a; // A
+                }
+            }
+        }
+    }
+}
+
+fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
+    let r = r.min(w / 2.0).min(h / 2.0);
+    let mut pb = PathBuilder::new();
+    pb.move_to(x + r, y);
+    pb.line_to(x + w - r, y);
+    pb.quad_to(x + w, y, x + w, y + r);
+    pb.line_to(x + w, y + h - r);
+    pb.quad_to(x + w, y + h, x + w - r, y + h);
+    pb.line_to(x + r, y + h);
+    pb.quad_to(x, y + h, x, y + h - r);
+    pb.line_to(x, y + r);
+    pb.quad_to(x, y, x + r, y);
+    pb.close();
+    pb.finish()
+}
+
+fn draw_glyph_to_pixmap(pixmap: &mut Pixmap, x: u32, y: u32, scale: u32, ch: char, color: [u8; 4]) {
+    let rows = match glyph_rows(ch) {
+        Some(rows) => rows,
+        None => return,
+    };
+    let mut paint = Paint::default();
+    paint.set_color(Color::from_rgba8(color[0], color[1], color[2], color[3]));
+    paint.anti_alias = false;
+
+    for (row_index, row_bits) in rows.iter().enumerate() {
+        for col in 0..5u32 {
+            let mask = 1 << (4 - col);
+            if row_bits & mask == 0 {
+                continue;
+            }
+            let px = x + col * scale;
+            let py = y + row_index as u32 * scale;
+            if let Some(rect) = tiny_skia::Rect::from_xywh(px as f32, py as f32, scale as f32, scale as f32) {
+                pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+            }
+        }
     }
 }
 
@@ -806,65 +867,6 @@ fn blit_preview(canvas: &mut [u8], canvas_width: u32, preview: &PreviewImage, of
             canvas[dst_idx + 1] = preview.pixels[src_idx + 1];
             canvas[dst_idx + 2] = preview.pixels[src_idx];
             canvas[dst_idx + 3] = preview.pixels[src_idx + 3];
-        }
-    }
-}
-
-fn fill_rect(
-    canvas: &mut [u8],
-    width: u32,
-    height: u32,
-    x: u32,
-    y: u32,
-    w: u32,
-    h: u32,
-    color: [u8; 4],
-) {
-    let max_x = x.saturating_add(w).min(width);
-    let max_y = y.saturating_add(h).min(height);
-    if max_x <= x || max_y <= y {
-        return;
-    }
-    let color = [color[2], color[1], color[0], color[3]];
-
-    for yy in y..max_y {
-        let row = (yy * width * 4) as usize;
-        for xx in x..max_x {
-            let idx = row + (xx * 4) as usize;
-            if idx + 3 >= canvas.len() {
-                continue;
-            }
-            canvas[idx] = color[0];
-            canvas[idx + 1] = color[1];
-            canvas[idx + 2] = color[2];
-            canvas[idx + 3] = color[3];
-        }
-    }
-}
-
-fn draw_glyph(
-    canvas: &mut [u8],
-    width: u32,
-    height: u32,
-    x: u32,
-    y: u32,
-    scale: u32,
-    ch: char,
-    color: [u8; 4],
-) {
-    let rows = match glyph_rows(ch) {
-        Some(rows) => rows,
-        None => return,
-    };
-    for (row_index, row_bits) in rows.iter().enumerate() {
-        for col in 0..5 {
-            let mask = 1 << (4 - col);
-            if row_bits & mask == 0 {
-                continue;
-            }
-            let px = x.saturating_add(col as u32 * scale);
-            let py = y.saturating_add(row_index as u32 * scale);
-            fill_rect(canvas, width, height, px, py, scale, scale, color);
         }
     }
 }
