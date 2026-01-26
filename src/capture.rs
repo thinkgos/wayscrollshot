@@ -7,6 +7,8 @@ use crate::types::Region;
 
 pub fn select_region() -> Result<Region> {
     let output = Command::new("slurp")
+        .arg("-f")
+        .arg("%x,%y %wx%h")
         .output()
         .context("failed to run slurp")?;
     if !output.status.success() {
@@ -16,6 +18,7 @@ pub fn select_region() -> Result<Region> {
     if raw.is_empty() {
         bail!("slurp returned empty selection");
     }
+    log::debug!("slurp output: {}", raw);
     parse_region(&raw)
 }
 
@@ -43,13 +46,22 @@ fn parse_region(raw: &str) -> Result<Region> {
 }
 
 pub fn capture_frame(region: &Region) -> Result<RgbaImage> {
+    log::debug!("grim capture region: {}", region.raw);
     let output = Command::new("grim")
         .arg("-g")
         .arg(&region.raw)
+        .arg("-t")
+        .arg("png")
+        .arg("-l")
+        .arg("0")
+        .arg("-s")
+        .arg("1")
         .arg("-")
         .output()
         .context("failed to run grim")?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        log::error!("grim stderr: {}", stderr);
         bail!("grim exited with non-zero status");
     }
     let image = image::load_from_memory(&output.stdout)?;
