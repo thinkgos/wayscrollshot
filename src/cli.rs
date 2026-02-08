@@ -21,7 +21,7 @@ pub enum Algorithm {
 #[command(name = "wayscrollshot")]
 #[command(about = "A scrolling screenshot tool for Wayland", long_about = None)]
 pub struct Args {
-    /// Output file path (default: ~/Pictures/wayscrollshot-<timestamp>.png)
+    /// Output file path (default: $XDG_PICTURES_DIR/wayscrollshot-<timestamp>.png)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 

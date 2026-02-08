@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use chrono::Local;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder, RgbaImage};
+use directories::UserDirs;
 
 pub fn save_image(image: Arc<RgbaImage>, output_path: Option<PathBuf>) -> Result<PathBuf> {
     let path = match output_path {
@@ -87,12 +88,14 @@ fn command_exists(cmd: &str) -> bool {
 }
 
 fn default_output_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        let pictures = PathBuf::from(&home).join("Pictures");
-        if pictures.is_dir() {
-            return pictures;
+    if let Some(dirs) = UserDirs::new() {
+        if let Some(pictures) = dirs.picture_dir() {
+            return pictures.to_path_buf();
         }
-        return PathBuf::from(home);
+        return dirs.home_dir().to_path_buf();
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+
+    // Both UserDirs and home_dir failed, fall back to current directory
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
 }
