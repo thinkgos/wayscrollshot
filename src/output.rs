@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::fs;
 
 use anyhow::{bail, Context, Result};
 use chrono::Local;
@@ -92,10 +93,12 @@ fn default_output_dir() -> PathBuf {
         if let Some(pictures) = dirs.picture_dir() {
             return pictures.to_path_buf();
         }
-        return dirs.home_dir().to_path_buf();
+        let pictures_fallback = dirs.home_dir().join("Pictures");
+        if pictures_fallback.exists() || fs::create_dir_all(&pictures_fallback).is_ok() {
+            return pictures_fallback;
+        }
     }
-
-    // Both UserDirs and home_dir failed, fall back to current directory
+    // Both UserDirs and pictures_fallback failed, fall back to current directory
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
 }
