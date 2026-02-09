@@ -132,7 +132,7 @@ wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）
 
 | 选项 | 描述 | 默认值 |
 |------|------|--------|
-| `-o, --output <PATH>` | 输出文件路径 | `$XDG_PICTURES_DIR/wayscrollshot-<时间戳>.png` |
+| `-o, --output <PATH>` | <p>输出文件路径<br><br>( 若未设置 XDG_PICTURES_DIR，则分别回退至 ~/Pictures 或当前目录。)</p> | `$XDG_PICTURES_DIR/wayscrollshot-<时间戳>.png` |
 | `-w, --preview-width <PX>` | 预览宽度（像素） | 280 |
 | `-c, --clipboard` | 复制到剪贴板而非保存 | false |
 | `--no-preview` | 禁用预览窗口 | false |
