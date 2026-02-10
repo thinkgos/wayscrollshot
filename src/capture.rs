@@ -5,6 +5,7 @@ use image::RgbaImage;
 
 use crate::types::Region;
 
+/// Prompts the user to select a capture region with `slurp`.
 pub fn select_region() -> Result<Region> {
     let output = Command::new("slurp")
         .arg("-f")
@@ -45,6 +46,7 @@ fn parse_region(raw: &str) -> Result<Region> {
     })
 }
 
+/// Captures a PNG frame from the selected region via `grim`.
 pub fn capture_frame(region: &Region) -> Result<RgbaImage> {
     log::debug!("grim capture region: {}", region.raw);
     let output = Command::new("grim")

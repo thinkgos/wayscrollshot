@@ -157,6 +157,7 @@ pub struct RegionOverlay {
 }
 
 impl RegionOverlay {
+    /// Spawns the region border overlay thread and waits for initialization.
     pub fn new(region: Region) -> Result<Self> {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_clone = stop_flag.clone();
@@ -180,6 +181,7 @@ impl RegionOverlay {
         })
     }
 
+    /// Stops the region overlay thread and joins it.
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
@@ -395,8 +397,8 @@ fn run_region_overlay(
     let output_state = OutputState::new(&globals, &qh);
     let output_rects = output_rects_from_state(&output_state);
     let selected_output_rect = select_output_for_region(&region, &output_rects);
-    let selected_output = selected_output_rect
-        .and_then(|rect| find_output_by_id(&output_state, rect.id));
+    let selected_output =
+        selected_output_rect.and_then(|rect| find_output_by_id(&output_state, rect.id));
 
     let surface = compositor.create_surface(&qh);
     let layer = layer_shell.create_layer_surface(
@@ -430,8 +432,8 @@ fn run_region_overlay(
     layer.wl_surface().set_input_region(Some(&input_region));
     layer.commit();
 
-    let pool = SlotPool::new((width * height * 4) as usize, &shm)
-        .context("failed to create shm pool")?;
+    let pool =
+        SlotPool::new((width * height * 4) as usize, &shm).context("failed to create shm pool")?;
 
     let mut border_state = RegionBorder {
         registry_state: RegistryState::new(&globals),

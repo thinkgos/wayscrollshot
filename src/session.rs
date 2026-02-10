@@ -12,6 +12,7 @@ use crate::region_overlay::RegionOverlay;
 use crate::stitch::{build_preview, MatchConfig, StitchOutcome, Stitcher};
 use crate::types::{Control, LayerMessage, Region, StitchState, UserCommand};
 
+/// Runs one interactive capture session from region selection to final action.
 pub fn run(args: Args) -> Result<()> {
     if !is_wayland_session() {
         bail!("Wayland session required (X11 not supported)");
@@ -73,6 +74,7 @@ pub fn run(args: Args) -> Result<()> {
     result
 }
 
+/// Handles overlay commands and finalization while capture worker is running.
 fn run_session(
     control: Arc<Control>,
     state: Arc<Mutex<StitchState>>,
@@ -131,6 +133,7 @@ fn run_session(
     Ok(())
 }
 
+/// Returns the latest stitched image snapshot.
 fn take_snapshot(state: &Arc<Mutex<StitchState>>) -> Result<Arc<RgbaImage>> {
     let state = state.lock().expect("state lock");
     state
@@ -139,6 +142,7 @@ fn take_snapshot(state: &Arc<Mutex<StitchState>>) -> Result<Arc<RgbaImage>> {
         .ok_or_else(|| anyhow!("no frames captured yet"))
 }
 
+/// Detects whether current desktop session is Wayland.
 fn is_wayland_session() -> bool {
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
         return true;
@@ -149,6 +153,7 @@ fn is_wayland_session() -> bool {
     )
 }
 
+/// Spawns background capture + stitching worker.
 fn spawn_capture_worker(
     region: Region,
     control: Arc<Control>,
@@ -231,6 +236,7 @@ fn spawn_capture_worker(
     })
 }
 
+/// Applies a successful stitch update and publishes preview frame.
 fn apply_state_update(
     state: &Arc<Mutex<StitchState>>,
     stitcher: &Stitcher,
@@ -253,6 +259,7 @@ fn apply_state_update(
     st.revision = st.revision.wrapping_add(1);
 }
 
+/// Updates session status/message without appending new content.
 fn update_status(
     state: &Arc<Mutex<StitchState>>,
     message: String,

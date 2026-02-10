@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use image::RgbaImage;
 
+/// User-selected capture region in global compositor coordinates.
 #[derive(Clone, Debug)]
 pub struct Region {
     pub raw: String,
@@ -12,6 +13,7 @@ pub struct Region {
     pub h: u32,
 }
 
+/// Shared run-state flags for capture worker and command loop.
 #[derive(Default)]
 pub struct Control {
     running: AtomicBool,
@@ -19,6 +21,7 @@ pub struct Control {
 }
 
 impl Control {
+    /// Creates a running, unpaused control state.
     pub fn new() -> Self {
         Self {
             running: AtomicBool::new(true),
@@ -26,19 +29,23 @@ impl Control {
         }
     }
 
+    /// Requests worker shutdown.
     pub fn stop(&self) {
         self.running.store(false, Ordering::Relaxed);
     }
 
+    /// Toggles pause state.
     pub fn toggle_pause(&self) {
         let current = self.paused.load(Ordering::Relaxed);
         self.paused.store(!current, Ordering::Relaxed);
     }
 
+    /// Returns whether the worker should continue running.
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }
 
+    /// Returns whether capture is currently paused.
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Relaxed)
     }

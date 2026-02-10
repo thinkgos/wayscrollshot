@@ -12,6 +12,7 @@ use anyhow::Result;
 
 use crate::cli::Args;
 
+/// Program entrypoint.
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse_args();
