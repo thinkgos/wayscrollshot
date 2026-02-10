@@ -8,7 +8,7 @@ use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
     delegate_registry, delegate_seat, delegate_shm,
-    output::{OutputHandler, OutputState},
+    output::{OutputData, OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
@@ -29,7 +29,7 @@ use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Transform};
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_region, wl_seat, wl_shm, wl_surface},
-    Connection, QueueHandle,
+    Connection, Proxy, QueueHandle,
 };
 
 use crate::constants::CONTROL_BAR_HEIGHT;
@@ -47,6 +47,7 @@ const COLOR_LABEL: [u8; 4] = [255, 255, 255, 255];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct OutputRect {
+    id: u32,
     x: i32,
     y: i32,
     width: i32,
@@ -121,11 +122,24 @@ fn output_rect_from_info(info: &smithay_client_toolkit::output::OutputInfo) -> O
     let (x, y) = info.logical_position.unwrap_or(info.location);
 
     Some(OutputRect {
+        id: info.id,
         x,
         y,
         width,
         height,
     })
+}
+
+fn output_id(output: &wl_output::WlOutput) -> Option<u32> {
+    output
+        .data::<OutputData>()
+        .map(|data| data.with_output_info(|info| info.id))
+}
+
+fn find_output_by_id(output_state: &OutputState, id: u32) -> Option<wl_output::WlOutput> {
+    output_state
+        .outputs()
+        .find(|output| output_id(output) == Some(id))
 }
 
 fn select_output_for_region(region: &Region, outputs: &[OutputRect]) -> Option<OutputRect> {
@@ -183,6 +197,18 @@ fn compute_preview_margin_left(region: &Region, preview_width: u32, outputs: &[O
         right_candidate.clamp(output_left, max_left)
     };
     i64_to_i32_saturating(clamped)
+}
+
+fn compute_layer_margins(region: &Region, preview_width: u32, outputs: &[OutputRect]) -> (i32, i32) {
+    let left_global = compute_preview_margin_left(region, preview_width, outputs);
+    if let Some(output) = select_output_for_region(region, outputs) {
+        (
+            region.y.saturating_sub(output.y),
+            left_global.saturating_sub(output.x),
+        )
+    } else {
+        (region.y, left_global)
+    }
 }
 
 fn output_rects_from_state(output_state: &OutputState) -> Vec<OutputRect> {
@@ -337,9 +363,10 @@ impl LayerPreview {
     }
 
     fn update_position(&mut self) {
-        let margin_left =
-            compute_preview_margin_left(&self.region, self.width, &self.output_rects());
-        self.layer.set_margin(self.region.y, 0, 0, margin_left);
+        let output_rects = self.output_rects();
+        let (margin_top, margin_left) =
+            compute_layer_margins(&self.region, self.width, &output_rects);
+        self.layer.set_margin(margin_top, 0, 0, margin_left);
     }
 
     fn desired_size_from_preview(&self, preview: &PreviewImage) -> (u32, u32) {
@@ -880,8 +907,12 @@ fn run_layer_shell_overlay(
     let layer_shell = LayerShell::bind(&globals, &qh).context("layer-shell not available")?;
     log::info!("Layer-shell bound successfully");
     let shm = Shm::bind(&globals, &qh).context("wl_shm not available")?;
+    let output_state = OutputState::new(&globals, &qh);
 
     let initial_preview_width = preview_width.max(1);
+    let selected_output_rect = select_output_for_region(&region, &output_rects);
+    let selected_output = selected_output_rect
+        .and_then(|rect| find_output_by_id(&output_state, rect.id));
 
     let surface = compositor.create_surface(&qh);
     let layer = layer_shell.create_layer_surface(
@@ -889,11 +920,11 @@ fn run_layer_shell_overlay(
         surface,
         Layer::Overlay,
         Some("wayscrollshot-overlay"),
-        None,
+        selected_output.as_ref(),
     );
 
-    let margin_left = compute_preview_margin_left(&region, initial_preview_width, &output_rects);
-    let margin_top = region.y;
+    let (margin_top, margin_left) =
+        compute_layer_margins(&region, initial_preview_width, &output_rects);
 
     layer.set_anchor(Anchor::TOP | Anchor::LEFT);
     layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
@@ -911,7 +942,7 @@ fn run_layer_shell_overlay(
     let mut preview = LayerPreview {
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
-        output_state: OutputState::new(&globals, &qh),
+        output_state,
         shm,
         pool,
         layer,
@@ -1249,6 +1280,7 @@ mod tests {
 
     fn output(x: i32, y: i32, width: i32, height: i32) -> OutputRect {
         OutputRect {
+            id: 0,
             x,
             y,
             width,
