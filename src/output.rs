@@ -1,15 +1,16 @@
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::fs;
 
 use anyhow::{bail, Context, Result};
 use chrono::Local;
+use directories::UserDirs;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder, RgbaImage};
-use directories::UserDirs;
 
+/// Saves the stitched image to an explicit path or a timestamped default path.
 pub fn save_image(image: Arc<RgbaImage>, output_path: Option<PathBuf>) -> Result<PathBuf> {
     let path = match output_path {
         Some(p) => {
@@ -31,6 +32,7 @@ pub fn save_image(image: Arc<RgbaImage>, output_path: Option<PathBuf>) -> Result
     Ok(path)
 }
 
+/// Copies the stitched image to clipboard using `wl-copy` or `xclip`.
 pub fn copy_to_clipboard(image: Arc<RgbaImage>) -> Result<()> {
     let png_bytes = encode_png(&image)?;
     if command_exists("wl-copy") {
@@ -72,7 +74,12 @@ pub fn copy_to_clipboard(image: Arc<RgbaImage>) -> Result<()> {
 fn encode_png(image: &RgbaImage) -> Result<Vec<u8>> {
     let mut data = Vec::new();
     let encoder = PngEncoder::new(&mut data);
-    encoder.write_image(image.as_raw(), image.width(), image.height(), ExtendedColorType::Rgba8)?;
+    encoder.write_image(
+        image.as_raw(),
+        image.width(),
+        image.height(),
+        ExtendedColorType::Rgba8,
+    )?;
     Ok(data)
 }
 
@@ -99,6 +106,5 @@ fn default_output_dir() -> PathBuf {
         }
     }
     // Both UserDirs and pictures_fallback failed, fall back to current directory
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }

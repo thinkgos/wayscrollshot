@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
-    output::{OutputHandler, OutputState},
+    output::{OutputData, OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     shell::{
@@ -22,11 +22,134 @@ use smithay_client_toolkit::{
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{wl_output, wl_region, wl_shm, wl_surface},
-    Connection, QueueHandle,
+    Connection, Proxy, QueueHandle,
 };
 
 use crate::constants::{REGION_BORDER_COLOR, REGION_BORDER_WIDTH};
 use crate::types::Region;
+
+#[derive(Clone, Copy, Debug)]
+struct OutputRect {
+    id: u32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+impl OutputRect {
+    fn right(self) -> i32 {
+        self.x.saturating_add(self.width)
+    }
+
+    fn bottom(self) -> i32 {
+        self.y.saturating_add(self.height)
+    }
+
+    fn contains_point(self, x: i64, y: i64) -> bool {
+        let left = i64::from(self.x);
+        let top = i64::from(self.y);
+        let right = i64::from(self.right());
+        let bottom = i64::from(self.bottom());
+        x >= left && x < right && y >= top && y < bottom
+    }
+
+    fn distance_squared_to_point(self, x: i64, y: i64) -> i128 {
+        let left = i64::from(self.x);
+        let top = i64::from(self.y);
+        let right = i64::from(self.right());
+        let bottom = i64::from(self.bottom());
+
+        let dx = if x < left {
+            left - x
+        } else if x >= right {
+            x - right + 1
+        } else {
+            0
+        };
+
+        let dy = if y < top {
+            top - y
+        } else if y >= bottom {
+            y - bottom + 1
+        } else {
+            0
+        };
+
+        let dx = i128::from(dx);
+        let dy = i128::from(dy);
+        dx * dx + dy * dy
+    }
+}
+
+fn output_rect_from_info(info: &smithay_client_toolkit::output::OutputInfo) -> Option<OutputRect> {
+    let (fallback_width, fallback_height) = info
+        .modes
+        .iter()
+        .find(|mode| mode.current)
+        .or_else(|| info.modes.first())
+        .map(|mode| mode.dimensions)
+        .unwrap_or((0, 0));
+
+    let (width, height) = info
+        .logical_size
+        .unwrap_or((fallback_width, fallback_height));
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+
+    let (x, y) = info.logical_position.unwrap_or(info.location);
+
+    Some(OutputRect {
+        id: info.id,
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+fn output_rects_from_state(output_state: &OutputState) -> Vec<OutputRect> {
+    output_state
+        .outputs()
+        .filter_map(|output| output_state.info(&output))
+        .filter_map(|info| output_rect_from_info(&info))
+        .collect()
+}
+
+fn output_id(output: &wl_output::WlOutput) -> Option<u32> {
+    output
+        .data::<OutputData>()
+        .map(|data| data.with_output_info(|info| info.id))
+}
+
+fn find_output_by_id(output_state: &OutputState, id: u32) -> Option<wl_output::WlOutput> {
+    output_state
+        .outputs()
+        .find(|output| output_id(output) == Some(id))
+}
+
+fn select_output_for_region(region: &Region, outputs: &[OutputRect]) -> Option<OutputRect> {
+    if outputs.is_empty() {
+        return None;
+    }
+
+    let center_x = i64::from(region.x).saturating_add(i64::from(region.w) / 2);
+    let center_y = i64::from(region.y).saturating_add(i64::from(region.h) / 2);
+
+    if let Some(output) = outputs
+        .iter()
+        .copied()
+        .find(|output| output.contains_point(center_x, center_y))
+    {
+        return Some(output);
+    }
+
+    outputs
+        .iter()
+        .copied()
+        .min_by_key(|output| output.distance_squared_to_point(center_x, center_y))
+}
 
 pub struct RegionOverlay {
     stop_flag: Arc<AtomicBool>,
@@ -34,6 +157,7 @@ pub struct RegionOverlay {
 }
 
 impl RegionOverlay {
+    /// Spawns the region border overlay thread and waits for initialization.
     pub fn new(region: Region) -> Result<Self> {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_clone = stop_flag.clone();
@@ -57,6 +181,7 @@ impl RegionOverlay {
         })
     }
 
+    /// Stops the region overlay thread and joins it.
     pub fn stop(&mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
@@ -269,6 +394,11 @@ fn run_region_overlay(
     let compositor = CompositorState::bind(&globals, &qh).context("wl_compositor not available")?;
     let layer_shell = LayerShell::bind(&globals, &qh).context("layer-shell not available")?;
     let shm = Shm::bind(&globals, &qh).context("wl_shm not available")?;
+    let output_state = OutputState::new(&globals, &qh);
+    let output_rects = output_rects_from_state(&output_state);
+    let selected_output_rect = select_output_for_region(&region, &output_rects);
+    let selected_output =
+        selected_output_rect.and_then(|rect| find_output_by_id(&output_state, rect.id));
 
     let surface = compositor.create_surface(&qh);
     let layer = layer_shell.create_layer_surface(
@@ -276,21 +406,25 @@ fn run_region_overlay(
         surface,
         Layer::Overlay,
         Some("wayscrollshot-region"),
-        None,
+        selected_output.as_ref(),
     );
 
     let border = REGION_BORDER_WIDTH;
     let width = region.w + border * 2;
     let height = region.h + border * 2;
 
+    let output_origin = selected_output_rect
+        .map(|rect| (rect.x, rect.y))
+        .unwrap_or((0, 0));
+
     layer.set_anchor(Anchor::TOP | Anchor::LEFT);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     layer.set_exclusive_zone(-1);
     layer.set_margin(
-        region.y - border as i32,
+        region.y - output_origin.1 - border as i32,
         0,
         0,
-        region.x - border as i32,
+        region.x - output_origin.0 - border as i32,
     );
     layer.set_size(width, height);
 
@@ -298,12 +432,12 @@ fn run_region_overlay(
     layer.wl_surface().set_input_region(Some(&input_region));
     layer.commit();
 
-    let pool = SlotPool::new((width * height * 4) as usize, &shm)
-        .context("failed to create shm pool")?;
+    let pool =
+        SlotPool::new((width * height * 4) as usize, &shm).context("failed to create shm pool")?;
 
     let mut border_state = RegionBorder {
         registry_state: RegistryState::new(&globals),
-        output_state: OutputState::new(&globals, &qh),
+        output_state,
         shm,
         pool,
         layer,

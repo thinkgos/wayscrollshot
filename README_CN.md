@@ -160,6 +160,8 @@ wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）
 | `Space` | 暂停/继续捕获 |
 | `Q` / `Esc` | 取消并退出 |
 
+> **注意：** 键盘快捷键依赖合成器对 `wlr-layer-shell` `OnDemand` 键盘焦点的实现。在 niri 下工作良好；在 Hyprland 等合成器下可能需要将鼠标悬停在控制栏上才能触发。所有合成器均可通过鼠标点击控制栏按钮进行操作。
+
 ## 局限性
 
 1. **仅支持 Wayland**：不支持 X11。本工具使用 `wlr-layer-shell-unstable-v1` 协议。

@@ -160,6 +160,8 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 | `Space` | Pause/Resume capture |
 | `Q` / `Esc` | Cancel and exit |
 
+> **Note:** Keyboard shortcuts depend on the compositor's `wlr-layer-shell` `OnDemand` keyboard focus policy. They work well under niri; on Hyprland and some other compositors you may need to hover the mouse over the control bar first. Mouse clicks on the control bar buttons work on all compositors.
+
 ## Limitations
 
 1. **Wayland only**: X11 is not supported. The tool uses `wlr-layer-shell-unstable-v1` protocol.
