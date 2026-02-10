@@ -11,7 +11,7 @@
 - 圆角按钮 UI 与悬停效果（基于 tiny-skia）
 - 键盘快捷键与鼠标控制
 - 保存到文件或复制到剪贴板
-- 支持反向滚动
+- 支持反向滚动(仅列采样算法)
 
 ## 工作原理
 
@@ -26,7 +26,7 @@
 
 ### 列采样算法
 
-wayscrollshot 没有采用逐像素比较整张图像的方式，而是使用了受 [screenshot-splicing](https://github.com/aspect-ratio/screenshot-splicing) 启发的列采样方法：
+wayscrollshot 没有采用逐像素比较整张图像的方式，而是使用了受 [screenshot-splicing](https://github.com/baotlake/screenshot-splicing) 启发的列采样方法：
 
 1. **从每帧采样 3 组列**：
    - 左侧区域（20 到 width/4）
@@ -144,6 +144,14 @@ wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）
 **鼠标：**
 - 点击控制栏中的按钮
 
+**控制栏按钮：**
+| 按钮 | 作用 |
+|------|------|
+| `S`（保存） | 保存图片并退出 |
+| `C`（复制） | 复制到剪贴板并退出 |
+| `P`（暂停/继续） | 暂停或继续捕获 |
+| `X`（取消） | 取消捕获并退出 |
+
 **键盘（当覆盖层获得焦点时）：**
 | 按键 | 操作 |
 |------|------|
@@ -202,7 +210,7 @@ MIT
 
 ## 致谢
 
-- [screenshot-splicing](https://github.com/aspect-ratio/screenshot-splicing) - 列采样算法灵感来源
+- [screenshot-splicing](https://github.com/baotlake/screenshot-splicing) - 列采样算法灵感来源
 - [snow-shot](https://github.com/mg-chao/snow-shot) - FAST 角点 + HNSW 算法参考
 - [smithay-client-toolkit](https://github.com/Smithay/client-toolkit) - Wayland 客户端库
 - [tiny-skia](https://github.com/RazrFalcon/tiny-skia) - 2D 图形库

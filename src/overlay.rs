@@ -36,8 +36,8 @@ use crate::constants::CONTROL_BAR_HEIGHT;
 use crate::types::{LayerMessage, PreviewImage, Region, UserCommand};
 
 const CONTROL_BUTTON_COUNT: u32 = 4;
-const INITIAL_WIDTH: u32 = 200;
 const INITIAL_HEIGHT: u32 = CONTROL_BAR_HEIGHT;
+const PREVIEW_GAP: i32 = 8;
 const COLOR_SAVE: [u8; 4] = [39, 174, 96, 230];
 const COLOR_COPY: [u8; 4] = [52, 152, 219, 230];
 const COLOR_PAUSE: [u8; 4] = [241, 196, 15, 230];
@@ -45,18 +45,236 @@ const COLOR_RESUME: [u8; 4] = [26, 188, 156, 230];
 const COLOR_CANCEL: [u8; 4] = [231, 76, 60, 230];
 const COLOR_LABEL: [u8; 4] = [255, 255, 255, 255];
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OutputRect {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+impl OutputRect {
+    fn right(self) -> i32 {
+        self.x.saturating_add(self.width)
+    }
+
+    fn bottom(self) -> i32 {
+        self.y.saturating_add(self.height)
+    }
+
+    fn contains_point(self, x: i64, y: i64) -> bool {
+        let left = i64::from(self.x);
+        let top = i64::from(self.y);
+        let right = i64::from(self.right());
+        let bottom = i64::from(self.bottom());
+        x >= left && x < right && y >= top && y < bottom
+    }
+
+    fn distance_squared_to_point(self, x: i64, y: i64) -> i128 {
+        let left = i64::from(self.x);
+        let top = i64::from(self.y);
+        let right = i64::from(self.right());
+        let bottom = i64::from(self.bottom());
+
+        let dx = if x < left {
+            left - x
+        } else if x >= right {
+            x - right + 1
+        } else {
+            0
+        };
+
+        let dy = if y < top {
+            top - y
+        } else if y >= bottom {
+            y - bottom + 1
+        } else {
+            0
+        };
+
+        let dx = i128::from(dx);
+        let dy = i128::from(dy);
+        dx * dx + dy * dy
+    }
+}
+
+fn i64_to_i32_saturating(value: i64) -> i32 {
+    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn output_rect_from_info(info: &smithay_client_toolkit::output::OutputInfo) -> Option<OutputRect> {
+    let (fallback_width, fallback_height) = info
+        .modes
+        .iter()
+        .find(|mode| mode.current)
+        .or_else(|| info.modes.first())
+        .map(|mode| mode.dimensions)
+        .unwrap_or((0, 0));
+
+    let (width, height) = info
+        .logical_size
+        .unwrap_or((fallback_width, fallback_height));
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+
+    let (x, y) = info.logical_position.unwrap_or(info.location);
+
+    Some(OutputRect {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+fn select_output_for_region(region: &Region, outputs: &[OutputRect]) -> Option<OutputRect> {
+    if outputs.is_empty() {
+        return None;
+    }
+
+    let center_x = i64::from(region.x).saturating_add(i64::from(region.w) / 2);
+    let center_y = i64::from(region.y).saturating_add(i64::from(region.h) / 2);
+
+    if let Some(output) = outputs
+        .iter()
+        .copied()
+        .find(|output| output.contains_point(center_x, center_y))
+    {
+        return Some(output);
+    }
+
+    outputs
+        .iter()
+        .copied()
+        .min_by_key(|output| output.distance_squared_to_point(center_x, center_y))
+}
+
+fn compute_preview_margin_left(region: &Region, preview_width: u32, outputs: &[OutputRect]) -> i32 {
+    let preview_width = preview_width.max(1);
+    let preview_width_i64 = i64::from(preview_width);
+    let right_candidate = i64::from(region.x)
+        .saturating_add(i64::from(region.w))
+        .saturating_add(i64::from(PREVIEW_GAP));
+
+    let Some(output) = select_output_for_region(region, outputs) else {
+        return i64_to_i32_saturating(right_candidate);
+    };
+
+    let output_left = i64::from(output.x);
+    let output_right = i64::from(output.right());
+
+    if right_candidate.saturating_add(preview_width_i64) <= output_right {
+        return i64_to_i32_saturating(right_candidate);
+    }
+
+    let left_candidate = i64::from(region.x)
+        .saturating_sub(i64::from(PREVIEW_GAP))
+        .saturating_sub(preview_width_i64);
+
+    if left_candidate >= output_left {
+        return i64_to_i32_saturating(left_candidate);
+    }
+
+    let max_left = output_right.saturating_sub(preview_width_i64);
+    let clamped = if max_left < output_left {
+        output_left
+    } else {
+        right_candidate.clamp(output_left, max_left)
+    };
+    i64_to_i32_saturating(clamped)
+}
+
+fn output_rects_from_state(output_state: &OutputState) -> Vec<OutputRect> {
+    output_state
+        .outputs()
+        .filter_map(|output| output_state.info(&output))
+        .filter_map(|info| output_rect_from_info(&info))
+        .collect()
+}
+
+struct OutputProbe {
+    registry_state: RegistryState,
+    output_state: OutputState,
+}
+
+impl OutputHandler for OutputProbe {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+}
+
+delegate_output!(OutputProbe);
+delegate_registry!(OutputProbe);
+
+impl ProvidesRegistryState for OutputProbe {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+
+    registry_handlers!(OutputState);
+}
+
+fn probe_output_rects() -> Result<Vec<OutputRect>> {
+    let conn = Connection::connect_to_env().context("failed to connect to Wayland for output probe")?;
+    let (globals, mut event_queue) =
+        registry_queue_init(&conn).context("failed to init Wayland registry for output probe")?;
+    let qh = event_queue.handle();
+
+    let mut output_probe = OutputProbe {
+        registry_state: RegistryState::new(&globals),
+        output_state: OutputState::new(&globals, &qh),
+    };
+
+    event_queue
+        .roundtrip(&mut output_probe)
+        .context("failed to gather output geometry")?;
+
+    Ok(output_rects_from_state(&output_probe.output_state))
+}
+
 pub struct LayerShellOverlay {
     tx: Option<mpsc::Sender<LayerMessage>>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
 impl LayerShellOverlay {
-    pub fn new(command_tx: mpsc::Sender<UserCommand>, region: Region) -> Result<Self> {
+    pub fn new(
+        command_tx: mpsc::Sender<UserCommand>,
+        region: Region,
+        preview_width: u32,
+    ) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
         let ready = Arc::new(AtomicBool::new(false));
         let ready_clone = ready.clone();
         let handle = thread::spawn(move || {
-            if let Err(err) = run_layer_shell_overlay(rx, command_tx, ready_clone, region) {
+            if let Err(err) =
+                run_layer_shell_overlay(rx, command_tx, ready_clone, region, preview_width)
+            {
                 log::warn!("layer-shell overlay failed: {err}");
             }
         });
@@ -101,6 +319,7 @@ struct LayerPreview {
     width: u32,
     height: u32,
     max_height: u32,
+    region: Region,
     configured: bool,
     exit: bool,
     preview: Option<PreviewImage>,
@@ -113,12 +332,28 @@ struct LayerPreview {
 }
 
 impl LayerPreview {
-    fn update_preview(&mut self, qh: &QueueHandle<Self>, preview: PreviewImage) {
+    fn output_rects(&self) -> Vec<OutputRect> {
+        output_rects_from_state(&self.output_state)
+    }
+
+    fn update_position(&mut self) {
+        let margin_left =
+            compute_preview_margin_left(&self.region, self.width, &self.output_rects());
+        self.layer.set_margin(self.region.y, 0, 0, margin_left);
+    }
+
+    fn desired_size_from_preview(&self, preview: &PreviewImage) -> (u32, u32) {
         let target_width = preview.width.max(1);
-        // Limit the display height to max_height (region height)
         let max_preview_height = self.max_height.saturating_sub(CONTROL_BAR_HEIGHT);
         let display_preview_height = preview.height.min(max_preview_height);
-        let target_height = display_preview_height.saturating_add(CONTROL_BAR_HEIGHT).max(1);
+        let target_height = display_preview_height
+            .saturating_add(CONTROL_BAR_HEIGHT)
+            .max(1);
+        (target_width, target_height)
+    }
+
+    fn update_preview(&mut self, qh: &QueueHandle<Self>, preview: PreviewImage) {
+        let (target_width, target_height) = self.desired_size_from_preview(&preview);
         let size_changed = self.width != target_width || self.height != target_height;
 
         self.preview = Some(preview);
@@ -127,6 +362,7 @@ impl LayerPreview {
             self.width = target_width;
             self.height = target_height;
             self.layer.set_size(self.width, self.height);
+            self.update_position();
             self.update_input_region();
         }
 
@@ -181,10 +417,12 @@ impl LayerPreview {
         }
 
         let stride = self.width as i32 * 4;
-        let (buffer, canvas) = match self
-            .pool
-            .create_buffer(self.width as i32, self.height as i32, stride, wl_shm::Format::Argb8888)
-        {
+        let (buffer, canvas) = match self.pool.create_buffer(
+            self.width as i32,
+            self.height as i32,
+            stride,
+            wl_shm::Format::Argb8888,
+        ) {
             Ok(result) => result,
             Err(err) => {
                 log::warn!("layer-shell buffer create failed: {err}");
@@ -197,7 +435,11 @@ impl LayerPreview {
         // Draw preview - show bottom part if preview is taller than available space
         if let Some(preview) = &self.preview {
             if preview.width != self.width {
-                log::warn!("preview width mismatch: {} vs {}", preview.width, self.width);
+                log::warn!(
+                    "preview width mismatch: {} vs {}",
+                    preview.width,
+                    self.width
+                );
             } else {
                 let available_height = self.height.saturating_sub(CONTROL_BAR_HEIGHT);
                 blit_preview_bottom(canvas, self.width, available_height, preview);
@@ -206,7 +448,14 @@ impl LayerPreview {
 
         // Draw control bar at the bottom
         let bar_y = self.height.saturating_sub(CONTROL_BAR_HEIGHT);
-        draw_control_bar(canvas, self.width, self.height, bar_y, self.paused, self.hover_button);
+        draw_control_bar(
+            canvas,
+            self.width,
+            self.height,
+            bar_y,
+            self.paused,
+            self.hover_button,
+        );
 
         self.layer
             .wl_surface()
@@ -348,25 +597,31 @@ impl OutputHandler for LayerPreview {
     fn new_output(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _output: wl_output::WlOutput,
     ) {
+        self.update_position();
+        self.request_redraw(qh);
     }
 
     fn update_output(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _output: wl_output::WlOutput,
     ) {
+        self.update_position();
+        self.request_redraw(qh);
     }
 
     fn output_destroyed(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _output: wl_output::WlOutput,
     ) {
+        self.update_position();
+        self.request_redraw(qh);
     }
 }
 
@@ -386,12 +641,7 @@ impl LayerShellHandler for LayerPreview {
         let (desired_w, desired_h) = self
             .preview
             .as_ref()
-            .map(|preview| {
-                (
-                    preview.width.max(1),
-                    preview.height.saturating_add(CONTROL_BAR_HEIGHT).max(1),
-                )
-            })
+            .map(|preview| self.desired_size_from_preview(preview))
             .unwrap_or((self.width.max(1), self.height.max(1)));
         if configure.new_size.0 == 0 || configure.new_size.1 == 0 {
             self.width = desired_w;
@@ -402,6 +652,7 @@ impl LayerShellHandler for LayerPreview {
         }
         self.configured = true;
         self.layer.set_size(self.width, self.height);
+        self.update_position();
         self.update_input_region();
         self.draw(qh);
     }
@@ -607,8 +858,17 @@ fn run_layer_shell_overlay(
     command_tx: mpsc::Sender<UserCommand>,
     ready: Arc<AtomicBool>,
     region: Region,
+    preview_width: u32,
 ) -> Result<()> {
     log::info!("Starting layer-shell overlay thread");
+    let output_rects = match probe_output_rects() {
+        Ok(rects) => rects,
+        Err(err) => {
+            log::warn!("output probe failed, using fallback placement: {err}");
+            Vec::new()
+        }
+    };
+
     let conn = Connection::connect_to_env().context("failed to connect to Wayland")?;
     log::info!("Connected to Wayland");
     let (globals, mut event_queue) =
@@ -616,9 +876,12 @@ fn run_layer_shell_overlay(
     let qh = event_queue.handle();
     let compositor = CompositorState::bind(&globals, &qh).context("wl_compositor not available")?;
     log::info!("Compositor bound");
+
     let layer_shell = LayerShell::bind(&globals, &qh).context("layer-shell not available")?;
     log::info!("Layer-shell bound successfully");
     let shm = Shm::bind(&globals, &qh).context("wl_shm not available")?;
+
+    let initial_preview_width = preview_width.max(1);
 
     let surface = compositor.create_surface(&qh);
     let layer = layer_shell.create_layer_surface(
@@ -629,21 +892,20 @@ fn run_layer_shell_overlay(
         None,
     );
 
-    // Position to the right of the selection region
-    let margin_left = region.x + region.w as i32 + 8;
+    let margin_left = compute_preview_margin_left(&region, initial_preview_width, &output_rects);
     let margin_top = region.y;
 
     layer.set_anchor(Anchor::TOP | Anchor::LEFT);
     layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
     layer.set_exclusive_zone(0);
     layer.set_margin(margin_top, 0, 0, margin_left);
-    layer.set_size(INITIAL_WIDTH, INITIAL_HEIGHT);
+    layer.set_size(initial_preview_width, INITIAL_HEIGHT);
 
     let input_region = compositor.wl_compositor().create_region(&qh, ());
     layer.wl_surface().set_input_region(Some(&input_region));
     layer.commit();
 
-    let pool = SlotPool::new((INITIAL_WIDTH * INITIAL_HEIGHT * 4) as usize, &shm)
+    let pool = SlotPool::new((initial_preview_width * INITIAL_HEIGHT * 4) as usize, &shm)
         .context("failed to create shm pool")?;
 
     let mut preview = LayerPreview {
@@ -655,9 +917,10 @@ fn run_layer_shell_overlay(
         layer,
         input_region,
         input_size: None,
-        width: INITIAL_WIDTH,
+        width: initial_preview_width,
         height: INITIAL_HEIGHT,
         max_height: region.h,
+        region,
         configured: false,
         exit: false,
         preview: None,
@@ -717,7 +980,14 @@ fn run_layer_shell_overlay(
     Ok(())
 }
 
-fn draw_control_bar(canvas: &mut [u8], width: u32, height: u32, bar_y: u32, paused: bool, hover_button: Option<u32>) {
+fn draw_control_bar(
+    canvas: &mut [u8],
+    width: u32,
+    height: u32,
+    bar_y: u32,
+    paused: bool,
+    hover_button: Option<u32>,
+) {
     let bar_height = CONTROL_BAR_HEIGHT.min(height.saturating_sub(bar_y));
     if width == 0 || bar_height == 0 {
         return;
@@ -777,7 +1047,13 @@ fn draw_control_bar(canvas: &mut [u8], width: u32, height: u32, bar_y: u32, paus
             let mut paint = Paint::default();
             paint.set_color(Color::from_rgba8(color[0], color[1], color[2], color[3]));
             paint.anti_alias = true;
-            pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+            pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
         }
 
         // Draw label
@@ -863,7 +1139,9 @@ fn draw_glyph_to_pixmap(pixmap: &mut Pixmap, x: u32, y: u32, scale: u32, ch: cha
             }
             let px = x + col * scale;
             let py = y + row_index as u32 * scale;
-            if let Some(rect) = tiny_skia::Rect::from_xywh(px as f32, py as f32, scale as f32, scale as f32) {
+            if let Some(rect) =
+                tiny_skia::Rect::from_xywh(px as f32, py as f32, scale as f32, scale as f32)
+            {
                 pixmap.fill_rect(rect, &paint, Transform::identity(), None);
             }
         }
@@ -939,41 +1217,91 @@ fn blit_preview(canvas: &mut [u8], canvas_width: u32, preview: &PreviewImage, of
 fn glyph_rows(ch: char) -> Option<[u8; 7]> {
     match ch {
         'C' => Some([
-            0b01110,
-            0b10001,
-            0b10000,
-            0b10000,
-            0b10000,
-            0b10001,
-            0b01110,
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
         ]),
         'P' => Some([
-            0b11110,
-            0b10001,
-            0b10001,
-            0b11110,
-            0b10000,
-            0b10000,
-            0b10000,
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
         ]),
         'S' => Some([
-            0b01111,
-            0b10000,
-            0b10000,
-            0b01110,
-            0b00001,
-            0b00001,
-            0b11110,
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
         ]),
         'X' => Some([
-            0b10001,
-            0b10001,
-            0b01010,
-            0b00100,
-            0b01010,
-            0b10001,
-            0b10001,
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
         ]),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_preview_margin_left, OutputRect, PREVIEW_GAP};
+    use crate::types::Region;
+
+    fn region(x: i32, y: i32, w: u32, h: u32) -> Region {
+        Region {
+            raw: String::new(),
+            x,
+            y,
+            w,
+            h,
+        }
+    }
+
+    fn output(x: i32, y: i32, width: i32, height: i32) -> OutputRect {
+        OutputRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn places_preview_to_right_when_space_available() {
+        let outputs = [output(0, 0, 1920, 1080)];
+        let region = region(200, 100, 400, 300);
+
+        let left = compute_preview_margin_left(&region, 280, &outputs);
+
+        assert_eq!(left, 200 + 400 + PREVIEW_GAP);
+    }
+
+    #[test]
+    fn moves_preview_to_left_when_right_side_overflows() {
+        let outputs = [output(0, 0, 1920, 1080)];
+        let region = region(1700, 100, 200, 300);
+
+        let left = compute_preview_margin_left(&region, 280, &outputs);
+
+        assert_eq!(left, 1700 - PREVIEW_GAP - 280);
+    }
+
+    #[test]
+    fn clamps_preview_when_neither_side_fits() {
+        let outputs = [output(0, 0, 800, 600)];
+        let region = region(300, 120, 200, 250);
+
+        let left = compute_preview_margin_left(&region, 700, &outputs);
+
+        assert_eq!(left, 100);
+    }
+
+    #[test]
+    fn chooses_output_containing_region_center() {
+        let outputs = [output(0, 0, 1920, 1080), output(1920, 0, 1920, 1080)];
+        let region = region(3600, 100, 200, 300);
+
+        let left = compute_preview_margin_left(&region, 400, &outputs);
+
+        assert_eq!(left, 3600 - PREVIEW_GAP - 400);
+    }
+
+    #[test]
+    fn falls_back_to_right_side_without_outputs() {
+        let region = region(50, 60, 120, 220);
+
+        let left = compute_preview_margin_left(&region, 300, &[]);
+
+        assert_eq!(left, 50 + 120 + PREVIEW_GAP);
     }
 }

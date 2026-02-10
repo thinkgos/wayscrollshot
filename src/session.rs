@@ -40,7 +40,11 @@ pub fn run(args: Args) -> Result<()> {
     let mut layer_overlay = if args.no_preview {
         None
     } else {
-        Some(LayerShellOverlay::new(command_tx.clone(), region.clone())?)
+        Some(LayerShellOverlay::new(
+            command_tx.clone(),
+            region.clone(),
+            args.preview_width,
+        )?)
     };
 
     let preview_tx = layer_overlay.as_ref().and_then(|o| o.sender());

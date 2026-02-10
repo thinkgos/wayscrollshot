@@ -11,7 +11,7 @@ A scrolling screenshot tool for Wayland that captures and stitches images in rea
 - Rounded button UI with hover effects (powered by tiny-skia)
 - Keyboard shortcuts and mouse control
 - Save to file or copy to clipboard
-- Supports reverse scrolling
+- Supports reverse scrolling (col-sample only)
 
 ## How It Works
 
@@ -26,7 +26,7 @@ A scrolling screenshot tool for Wayland that captures and stitches images in rea
 
 ### Column Sampling Algorithm
 
-Instead of comparing entire images pixel-by-pixel, wayscrollshot uses a column sampling approach inspired by [screenshot-splicing](https://github.com/aspect-ratio/screenshot-splicing):
+Instead of comparing entire images pixel-by-pixel, wayscrollshot uses a column sampling approach inspired by [screenshot-splicing](https://github.com/baotlake/screenshot-splicing):
 
 1. **Sample 3 column groups** from each frame:
    - Left region (20 to width/4)
@@ -144,6 +144,14 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 **Mouse:**
 - Click buttons in the control bar
 
+**Control bar buttons:**
+| Button | Action |
+|--------|--------|
+| `S` (Save) | Save image and exit |
+| `C` (Copy) | Copy to clipboard and exit |
+| `P` (Pause/Resume) | Pause or resume capture |
+| `X` (Cancel) | Cancel capture and exit |
+
 **Keyboard (when overlay is focused):**
 | Key | Action |
 |-----|--------|
@@ -202,7 +210,7 @@ Please open an issue to discuss major changes before submitting a PR.
 
 ## Acknowledgments
 
-- [screenshot-splicing](https://github.com/aspect-ratio/screenshot-splicing) - Column sampling algorithm inspiration
+- [screenshot-splicing](https://github.com/baotlake/screenshot-splicing) - Column sampling algorithm inspiration
 - [snow-shot](https://github.com/mg-chao/snow-shot) - FAST corner + HNSW algorithm reference
 - [smithay-client-toolkit](https://github.com/Smithay/client-toolkit) - Wayland client library
 - [tiny-skia](https://github.com/RazrFalcon/tiny-skia) - 2D graphics library
