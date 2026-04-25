@@ -7,7 +7,6 @@ use crate::constants::PREVIEW_MAX_WIDTH;
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 pub enum Algorithm {
     /// Column sampling (fast, good for most cases)
-    #[default]
     ColSample,
     /// Template matching (slower, more accurate)
     Template,
@@ -15,6 +14,10 @@ pub enum Algorithm {
     Edge,
     /// FAST corner + HNSW index (high accuracy, from snow-shot)
     Fast,
+    /// OpenCV ORB + brute-force matching + affine RANSAC
+    #[default]
+    #[value(name = "opencv-orb")]
+    OpenCvOrb,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -42,7 +45,7 @@ pub struct Args {
     pub no_border: bool,
 
     /// Stitching algorithm to use
-    #[arg(short, long, value_enum, default_value_t = Algorithm::ColSample)]
+    #[arg(short, long, value_enum, default_value_t = Algorithm::OpenCvOrb)]
     pub algorithm: Algorithm,
 }
 

@@ -137,7 +137,7 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 | `-c, --clipboard` | Copy to clipboard instead of saving | false |
 | `--no-preview` | Disable preview window | false |
 | `--no-border` | Disable region border overlay | false |
-| `-a, --algorithm <ALG>` | Stitching algorithm: `col-sample`, `template`, `edge`, `fast` | col-sample |
+| `-a, --algorithm <ALG>` | Stitching algorithm: `opencv-orb`, `col-sample`, `template`, `edge`, `fast` | opencv-orb |
 
 ### Controls
 

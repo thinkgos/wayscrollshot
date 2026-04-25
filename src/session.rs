@@ -1,16 +1,23 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
 
 use crate::capture::{capture_frame, select_region};
 use crate::cli::{Algorithm, Args};
-use crate::overlay::LayerShellOverlay;
 use crate::output::{copy_to_clipboard, save_image};
+use crate::overlay::LayerShellOverlay;
 use crate::region_overlay::RegionOverlay;
 use crate::stitch::{build_preview, MatchConfig, StitchOutcome, Stitcher};
 use crate::types::{Control, LayerMessage, Region, StitchState, UserCommand};
+
+const CAPTURE_INTERVAL: Duration = Duration::from_millis(45);
+const SIGNATURE_COLS: u32 = 18;
+const SIGNATURE_ROWS: u32 = 24;
+const DUPLICATE_AVG_DIFF: f32 = 1.1;
+const DUPLICATE_MAX_DIFF: u8 = 4;
 
 /// Runs one interactive capture session from region selection to final action.
 pub fn run(args: Args) -> Result<()> {
@@ -95,9 +102,7 @@ fn run_session(
                 }
             }
             UserCommand::Save => {
-                match take_snapshot(&state)
-                    .and_then(|img| save_image(img, args.output.clone()))
-                {
+                match take_snapshot(&state).and_then(|img| save_image(img, args.output.clone())) {
                     Ok(path) => {
                         log::info!("Saved to {}", path.display());
                         control.stop();
@@ -163,15 +168,27 @@ fn spawn_capture_worker(
     algorithm: Algorithm,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let config = MatchConfig {
-            min_overlap: 100,
-            accept_diff: 5.0,
-            min_append: 15,
-            approx_diff: 1.0,
-            match_width: preview_width.max(200),
-            algorithm,
+        let config = match algorithm {
+            Algorithm::OpenCvOrb => MatchConfig {
+                min_overlap: 120,
+                accept_diff: 3.5,
+                min_append: 10,
+                approx_diff: 1.0,
+                match_width: preview_width.max(200),
+                algorithm,
+            },
+            _ => MatchConfig {
+                min_overlap: 100,
+                accept_diff: 5.0,
+                min_append: 15,
+                approx_diff: 1.0,
+                match_width: preview_width.max(200),
+                algorithm,
+            },
         };
         let mut stitcher = Stitcher::new(config);
+        let mut last_capture_end: Option<Instant> = None;
+        let mut last_signature: Option<Vec<u8>> = None;
 
         while control.is_running() {
             if control.is_paused() {
@@ -180,8 +197,32 @@ fn spawn_capture_worker(
                 continue;
             }
 
+            if let Some(last) = last_capture_end {
+                let elapsed = last.elapsed();
+                if elapsed < CAPTURE_INTERVAL {
+                    std::thread::sleep(CAPTURE_INTERVAL - elapsed);
+                }
+            }
+
             match capture_frame(&region) {
                 Ok(frame) => {
+                    last_capture_end = Some(Instant::now());
+
+                    let signature = frame_signature(&frame, SIGNATURE_COLS, SIGNATURE_ROWS);
+                    if let Some(previous) = last_signature.as_ref() {
+                        if is_duplicate_signature(previous, &signature) {
+                            update_status(
+                                &state,
+                                "Waiting for scroll".to_string(),
+                                Some(&stitcher),
+                                None,
+                                None,
+                            );
+                            continue;
+                        }
+                    }
+                    last_signature = Some(signature);
+
                     let outcome = stitcher.push_frame(frame);
                     match outcome {
                         StitchOutcome::FirstFrame => {
@@ -278,4 +319,43 @@ fn update_status(
     st.last_message = message;
     st.last_error = error;
     st.revision = st.revision.wrapping_add(1);
+}
+
+fn frame_signature(frame: &RgbaImage, cols: u32, rows: u32) -> Vec<u8> {
+    let width = frame.width().max(1);
+    let height = frame.height().max(1);
+    let cols = cols.max(1);
+    let rows = rows.max(1);
+    let mut signature = Vec::with_capacity((cols * rows) as usize);
+
+    for row in 0..rows {
+        let y = ((row * height) / rows).min(height - 1);
+        for col in 0..cols {
+            let x = ((col * width) / cols).min(width - 1);
+            let pixel = frame.get_pixel(x, y);
+            let gray =
+                (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32) as u8;
+            signature.push(gray);
+        }
+    }
+
+    signature
+}
+
+fn is_duplicate_signature(previous: &[u8], current: &[u8]) -> bool {
+    if previous.len() != current.len() || previous.is_empty() {
+        return false;
+    }
+
+    let mut sum = 0f32;
+    let mut max_diff = 0u8;
+
+    for (&a, &b) in previous.iter().zip(current.iter()) {
+        let diff = a.abs_diff(b);
+        max_diff = max_diff.max(diff);
+        sum += diff as f32;
+    }
+
+    let avg = sum / previous.len() as f32;
+    avg <= DUPLICATE_AVG_DIFF && max_diff <= DUPLICATE_MAX_DIFF
 }

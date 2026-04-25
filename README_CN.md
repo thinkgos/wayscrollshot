@@ -137,7 +137,7 @@ wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）
 | `-c, --clipboard` | 复制到剪贴板而非保存 | false |
 | `--no-preview` | 禁用预览窗口 | false |
 | `--no-border` | 禁用区域边框覆盖层 | false |
-| `-a, --algorithm <ALG>` | 拼接算法：`col-sample`、`template`、`edge`、`fast` | col-sample |
+| `-a, --algorithm <ALG>` | 拼接算法：`opencv-orb`、`col-sample`、`template`、`edge`、`fast` | opencv-orb |
 
 ### 控制方式
 
