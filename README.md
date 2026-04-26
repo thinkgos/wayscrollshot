@@ -216,3 +216,5 @@ Please open an issue to discuss major changes before submitting a PR.
 - [snow-shot](https://github.com/mg-chao/snow-shot) - FAST corner + HNSW algorithm reference
 - [smithay-client-toolkit](https://github.com/Smithay/client-toolkit) - Wayland client library
 - [tiny-skia](https://github.com/RazrFalcon/tiny-skia) - 2D graphics library
+
+- Friend Links[Linux.do社区](https://linux.do/)
