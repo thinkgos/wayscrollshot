@@ -57,8 +57,29 @@ jobs:
           name: ${{ matrix.artifact }}
           path: target/${{ matrix.target }}/release/wayscrollshot
 
+  build-archlinux:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel clang git libxkbcommon nodejs opencv pkgconf rust
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayscrollshot-archlinux-x86_64
+          path: target/release/wayscrollshot
+
   release:
-    needs: build
+    needs: [build, build-archlinux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -78,6 +99,12 @@ jobs:
           name: wayscrollshot-linux-aarch64
           path: ./release/aarch64
 
+      - name: Download Arch Linux x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wayscrollshot-archlinux-x86_64
+          path: ./release/archlinux-x86_64
+
       - name: Create release archives
         run: |
           cd release/x86_64
@@ -86,6 +113,9 @@ jobs:
           cd ../aarch64
           chmod +x wayscrollshot
           tar -czvf ../wayscrollshot-linux-aarch64.tar.gz wayscrollshot
+          cd ../archlinux-x86_64
+          chmod +x wayscrollshot
+          tar -czvf ../wayscrollshot-archlinux-x86_64.tar.gz wayscrollshot
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -93,4 +123,53 @@ jobs:
           files: |
             release/wayscrollshot-linux-x86_64.tar.gz
             release/wayscrollshot-linux-aarch64.tar.gz
+            release/wayscrollshot-archlinux-x86_64.tar.gz
           generate_release_notes: true
+
+  aur:
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check AUR credentials
+        id: aur_credentials
+        run: |
+          if [ -n "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AUR_SSH_PRIVATE_KEY is not configured; skipping AUR publish"
+          fi
+
+      - name: Configure SSH
+        if: steps.aur_credentials.outputs.available == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          {
+            echo "Host aur.archlinux.org"
+            echo "  User aur"
+            echo "  IdentityFile ~/.ssh/aur"
+            echo "  IdentitiesOnly yes"
+          } >> ~/.ssh/config
+
+      - name: Update AUR package
+        if: steps.aur_credentials.outputs.available == 'true'
+        run: |
+          git clone ssh://aur@aur.archlinux.org/wayscrollshot-bin.git aur-package
+          git -C aur-package config user.name "github-actions[bot]"
+          git -C aur-package config user.email "github-actions[bot]@users.noreply.github.com"
+          scripts/update-aur-bin.sh "$GITHUB_REF_NAME" aur-package
+          if git -C aur-package diff --quiet; then
+            echo "AUR package is already up to date"
+            exit 0
+          fi
+          git -C aur-package add PKGBUILD .SRCINFO
+          git -C aur-package commit -m "Update to ${GITHUB_REF_NAME}"
+          git -C aur-package push
