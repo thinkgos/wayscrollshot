@@ -13,9 +13,11 @@ pkgver="${pkgver#v}"
 tag="v${pkgver}"
 
 pkgname="wayscrollshot-bin"
+pkgrel="${AUR_PKGREL:-1}"
 project_url="https://github.com/jswysnemc/wayscrollshot"
 asset="wayscrollshot-archlinux-x86_64.tar.gz"
 asset_url="${project_url}/releases/download/${tag}/${asset}"
+source_name="${pkgname}-${pkgver}.tar.gz"
 pkgdesc="A scrolling screenshot tool for Wayland"
 
 if [[ ! -d "$aur_dir/.git" ]]; then
@@ -33,7 +35,7 @@ cat >"${aur_dir}/PKGBUILD" <<EOF
 # Maintainer: Snemc-s <snemc@snemc.cn>
 pkgname=${pkgname}
 pkgver=${pkgver}
-pkgrel=1
+pkgrel=${pkgrel}
 pkgdesc="${pkgdesc}"
 arch=('x86_64')
 url="${project_url}"
@@ -45,7 +47,7 @@ optdepends=(
 )
 provides=("wayscrollshot=\${pkgver}")
 conflicts=('wayscrollshot' 'wayscrollshot-git')
-source=("\${url}/releases/download/v\${pkgver}/${asset}")
+source=("${source_name}::\${url}/releases/download/v\${pkgver}/${asset}")
 sha256sums=('${sha256}')
 
 package() {
@@ -57,7 +59,7 @@ cat >"${aur_dir}/.SRCINFO" <<EOF
 pkgbase = ${pkgname}
 	pkgdesc = ${pkgdesc}
 	pkgver = ${pkgver}
-	pkgrel = 1
+	pkgrel = ${pkgrel}
 	url = ${project_url}
 	arch = x86_64
 	license = MIT
@@ -72,7 +74,7 @@ pkgbase = ${pkgname}
 	provides = wayscrollshot=${pkgver}
 	conflicts = wayscrollshot
 	conflicts = wayscrollshot-git
-	source = ${asset_url}
+	source = ${source_name}::${asset_url}
 	sha256sums = ${sha256}
 
 pkgname = ${pkgname}
