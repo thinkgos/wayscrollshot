@@ -80,18 +80,21 @@ wayscrollshot 没有采用逐像素比较整张图像的方式，而是使用了
 | `wayland-client` | Wayland 协议绑定 |
 | `tiny-skia` | 2D 图形（圆角按钮） |
 | `image` | 图像处理与缩放 |
+| `opencv` | ORB 特征匹配与 RANSAC 对齐 |
 | `clap` | 命令行参数解析 |
 | `anyhow` | 错误处理 |
 | `chrono` | 文件名时间戳 |
 | `log` / `env_logger` | 日志记录 |
+
+从源码构建需要安装 OpenCV 开发文件和 Clang。
 
 ## 安装
 
 ### 从源码构建
 
 ```bash
-# 安装运行时依赖（Arch Linux）
-sudo pacman -S slurp grim wl-clipboard
+# 安装运行时和构建依赖（Arch Linux）
+sudo pacman -S slurp grim wl-clipboard opencv clang
 
 # 构建
 cargo build --release
@@ -122,7 +125,8 @@ wayscrollshot --no-preview
 wayscrollshot --no-border
 
 # 使用不同的拼接算法
-wayscrollshot -a col-sample  # 默认：快速列采样
+wayscrollshot -a opencv-orb  # 默认：ORB 特征匹配 + RANSAC
+wayscrollshot -a col-sample  # 快速列采样
 wayscrollshot -a template    # 模板匹配（更精确）
 wayscrollshot -a edge        # 边缘检测（适用于透明背景）
 wayscrollshot -a fast        # FAST 角点 + HNSW 索引（实验性）

@@ -518,7 +518,11 @@ impl Stitcher {
         }
     }
 
-    fn find_offset_opencv_relaxed(&self, prev: &RgbaImage, frame: &RgbaImage) -> Option<(i32, f32)> {
+    fn find_offset_opencv_relaxed(
+        &self,
+        prev: &RgbaImage,
+        frame: &RgbaImage,
+    ) -> Option<(i32, f32)> {
         if self.config.min_overlap <= RELAXED_MIN_OVERLAP_FLOOR {
             return None;
         }

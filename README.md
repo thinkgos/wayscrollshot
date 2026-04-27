@@ -80,18 +80,21 @@ The algorithm finds where Frame 2's top matches Frame 1's content, then appends 
 | `wayland-client` | Wayland protocol bindings |
 | `tiny-skia` | 2D graphics (rounded buttons) |
 | `image` | Image processing and resizing |
+| `opencv` | ORB feature matching and RANSAC alignment |
 | `clap` | Command-line argument parsing |
 | `anyhow` | Error handling |
 | `chrono` | Timestamp for filenames |
 | `log` / `env_logger` | Logging |
+
+OpenCV development files and Clang are required when building from source.
 
 ## Installation
 
 ### From Source
 
 ```bash
-# Install runtime dependencies (Arch Linux)
-sudo pacman -S slurp grim wl-clipboard
+# Install runtime and build dependencies (Arch Linux)
+sudo pacman -S slurp grim wl-clipboard opencv clang
 
 # Build
 cargo build --release
@@ -122,7 +125,8 @@ wayscrollshot --no-preview
 wayscrollshot --no-border
 
 # Use different stitching algorithms
-wayscrollshot -a col-sample  # Default: fast column sampling
+wayscrollshot -a opencv-orb  # Default: ORB feature matching + RANSAC
+wayscrollshot -a col-sample  # Fast column sampling
 wayscrollshot -a template    # Template matching (more accurate)
 wayscrollshot -a edge        # Edge detection (for transparent backgrounds)
 wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
