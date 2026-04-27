@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Once;
 
 use hora::core::ann_index::ANNIndex;
 use hora::index::hnsw_idx::HNSWIndex;
@@ -11,6 +12,7 @@ use opencv::calib3d;
 use opencv::core::{self, Point2f, Rect, Scalar, Vector, CV_8UC1, NORM_HAMMING};
 use opencv::features2d;
 use opencv::imgproc;
+use opencv::opencv_has_inherent_feature_opencl;
 use opencv::prelude::*;
 use rayon::prelude::*;
 
@@ -41,6 +43,19 @@ const TEMPLATE_FALLBACK_MIN_SCORE: f32 = 0.72;
 const TEMPLATE_FALLBACK_MIN_MARGIN: f32 = 0.015;
 const TEMPLATE_VERIFY_MAX_DIFF: f32 = 18.0;
 const RELAXED_MIN_OVERLAP_FLOOR: u32 = 72;
+
+static OPENCV_RUNTIME_INIT: Once = Once::new();
+
+pub fn init_opencv_runtime() {
+    OPENCV_RUNTIME_INIT.call_once(|| {
+        std::env::set_var("OPENCV_OPENCL_RUNTIME", "disabled");
+        opencv_has_inherent_feature_opencl! {
+            if let Err(err) = core::set_use_opencl(false) {
+                log::debug!("failed to disable OpenCV OpenCL runtime: {err}");
+            }
+        }
+    });
+}
 
 pub struct MatchConfig {
     pub min_overlap: u32,
@@ -618,6 +633,8 @@ fn estimate_orb_offset(
     frame: &RgbaImage,
     min_overlap: u32,
 ) -> opencv::Result<Option<OrbEstimate>> {
+    init_opencv_runtime();
+
     if prev.width() != frame.width() || prev.height() != frame.height() {
         return Ok(None);
     }

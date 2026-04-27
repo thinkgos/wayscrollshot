@@ -10,7 +10,7 @@ use crate::cli::{Algorithm, Args};
 use crate::output::{copy_to_clipboard, save_image};
 use crate::overlay::LayerShellOverlay;
 use crate::region_overlay::RegionOverlay;
-use crate::stitch::{build_preview, MatchConfig, StitchOutcome, Stitcher};
+use crate::stitch::{build_preview, init_opencv_runtime, MatchConfig, StitchOutcome, Stitcher};
 use crate::types::{Control, LayerMessage, Region, StitchState, UserCommand};
 
 const CAPTURE_INTERVAL: Duration = Duration::from_millis(45);
@@ -186,6 +186,9 @@ fn spawn_capture_worker(
                 algorithm,
             },
         };
+        if matches!(algorithm, Algorithm::OpenCvOrb) {
+            init_opencv_runtime();
+        }
         let mut stitcher = Stitcher::new(config);
         let mut last_capture_end: Option<Instant> = None;
         let mut last_signature: Option<Vec<u8>> = None;

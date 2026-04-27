@@ -200,8 +200,8 @@ struct RegionBorder {
     registry_state: RegistryState,
     output_state: OutputState,
     shm: Shm,
-    pool: SlotPool,
-    layer: LayerSurface,
+    pool: Option<SlotPool>,
+    layer: Option<LayerSurface>,
     width: u32,
     height: u32,
     configured: bool,
@@ -213,17 +213,23 @@ impl RegionBorder {
         if self.width == 0 || self.height == 0 {
             return;
         }
+        let Some(layer) = self.layer.as_ref() else {
+            return;
+        };
+        let Some(pool) = self.pool.as_mut() else {
+            return;
+        };
 
         let needed = (self.width * self.height * 4) as usize;
-        if self.pool.len() < needed {
-            if let Err(err) = self.pool.resize(needed) {
+        if pool.len() < needed {
+            if let Err(err) = pool.resize(needed) {
                 log::warn!("region overlay pool resize failed: {err}");
                 return;
             }
         }
 
         let stride = self.width as i32 * 4;
-        let (buffer, canvas) = match self.pool.create_buffer(
+        let (buffer, canvas) = match pool.create_buffer(
             self.width as i32,
             self.height as i32,
             stride,
@@ -239,14 +245,14 @@ impl RegionBorder {
         canvas.fill(0);
         draw_border(canvas, self.width, self.height);
 
-        self.layer
+        layer
             .wl_surface()
             .damage_buffer(0, 0, self.width as i32, self.height as i32);
-        if let Err(err) = buffer.attach_to(self.layer.wl_surface()) {
+        if let Err(err) = buffer.attach_to(layer.wl_surface()) {
             log::warn!("region overlay buffer attach failed: {err}");
             return;
         }
-        self.layer.commit();
+        layer.commit();
     }
 }
 
@@ -394,11 +400,29 @@ fn run_region_overlay(
     let compositor = CompositorState::bind(&globals, &qh).context("wl_compositor not available")?;
     let layer_shell = LayerShell::bind(&globals, &qh).context("layer-shell not available")?;
     let shm = Shm::bind(&globals, &qh).context("wl_shm not available")?;
-    let output_state = OutputState::new(&globals, &qh);
-    let output_rects = output_rects_from_state(&output_state);
+
+    let mut border_state = RegionBorder {
+        registry_state: RegistryState::new(&globals),
+        output_state: OutputState::new(&globals, &qh),
+        shm,
+        pool: None,
+        layer: None,
+        width: 1,
+        height: 1,
+        configured: false,
+        exit: false,
+    };
+
+    event_queue
+        .roundtrip(&mut border_state)
+        .context("failed to gather output geometry")?;
+
+    let output_rects = output_rects_from_state(&border_state.output_state);
+    log::debug!("region overlay output rects: {output_rects:?}");
     let selected_output_rect = select_output_for_region(&region, &output_rects);
-    let selected_output =
-        selected_output_rect.and_then(|rect| find_output_by_id(&output_state, rect.id));
+    log::debug!("region overlay selected output: {selected_output_rect:?}");
+    let selected_output = selected_output_rect
+        .and_then(|rect| find_output_by_id(&border_state.output_state, rect.id));
 
     let surface = compositor.create_surface(&qh);
     let layer = layer_shell.create_layer_surface(
@@ -432,20 +456,12 @@ fn run_region_overlay(
     layer.wl_surface().set_input_region(Some(&input_region));
     layer.commit();
 
-    let pool =
-        SlotPool::new((width * height * 4) as usize, &shm).context("failed to create shm pool")?;
-
-    let mut border_state = RegionBorder {
-        registry_state: RegistryState::new(&globals),
-        output_state,
-        shm,
-        pool,
-        layer,
-        width,
-        height,
-        configured: false,
-        exit: false,
-    };
+    let pool = SlotPool::new((width * height * 4) as usize, &border_state.shm)
+        .context("failed to create shm pool")?;
+    border_state.pool = Some(pool);
+    border_state.layer = Some(layer);
+    border_state.width = width;
+    border_state.height = height;
 
     event_queue
         .roundtrip(&mut border_state)
