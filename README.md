@@ -65,10 +65,11 @@ The algorithm finds where Frame 2's top matches Frame 1's content, then appends 
 
 ### Runtime Dependencies
 
-| Tool | Purpose | Required |
-|------|---------|----------|
+| Tool / Library | Purpose | Required |
+|----------------|---------|----------|
 | `slurp` | Region selection | Yes |
 | `grim` | Screen capture | Yes |
+| OpenCV | Default stitching algorithm | Yes |
 | `wl-copy` | Clipboard (Wayland) | For clipboard feature |
 | `xclip` | Clipboard (X11 fallback) | Alternative |
 
