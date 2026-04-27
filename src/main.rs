@@ -1,8 +1,8 @@
 mod capture;
 mod cli;
 mod constants;
-mod overlay;
 mod output;
+mod overlay;
 mod region_overlay;
 mod session;
 mod stitch;
