@@ -1,6 +1,7 @@
 # wayscrollshot
 
 A scrolling screenshot tool for Wayland that captures and stitches images in real-time as you scroll.
+![preview](./preview.png)
 
 [中文文档](README_CN.md)
 

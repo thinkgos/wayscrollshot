@@ -1,6 +1,7 @@
 # wayscrollshot
 
 一个用于 Wayland 的滚动截图工具，在滚动时实时捕获并拼接图像。
+![preview](./preview.png)
 
 [English](README.md)
 
