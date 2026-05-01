@@ -31,8 +31,8 @@ Instead of comparing entire images pixel-by-pixel, wayscrollshot uses a column s
 
 1. **Sample 3 column groups** from each frame:
    - Left region (20 to width/4)
-   - Middle region (width/2 to 5*width/8)
-   - Right region (6*width/8 to 7*width/8)
+   - Middle region (width/2 to 5\*width/8)
+   - Right region (6\*width/8 to 7\*width/8)
 
 2. **Convert to grayscale** and average each group
 
@@ -43,7 +43,7 @@ Instead of comparing entire images pixel-by-pixel, wayscrollshot uses a column s
 
 4. **Append new content** to the stitched image
 
-**Complexity**: O(9 * height) instead of O(width * height) - a significant speedup.
+**Complexity**: O(9 \* height) instead of O(width \* height) - a significant speedup.
 
 ### Overlap Detection
 
