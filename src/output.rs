@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -6,7 +5,6 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use chrono::Local;
-use directories::UserDirs;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder, RgbaImage};
 
@@ -96,15 +94,7 @@ fn command_exists(cmd: &str) -> bool {
 }
 
 fn default_output_dir() -> PathBuf {
-    if let Some(dirs) = UserDirs::new() {
-        if let Some(pictures) = dirs.picture_dir() {
-            return pictures.to_path_buf();
-        }
-        let pictures_fallback = dirs.home_dir().join("Pictures");
-        if pictures_fallback.exists() || fs::create_dir_all(&pictures_fallback).is_ok() {
-            return pictures_fallback;
-        }
-    }
-    // Both UserDirs and pictures_fallback failed, fall back to current directory
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("wayscrollshot")
 }

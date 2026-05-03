@@ -1,13 +1,12 @@
 [package]
 name = "wayscrollshot"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 
 [dependencies]
 anyhow = "1"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
-directories = "6.0.0"
 env_logger = "0.11"
 hora = "0.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

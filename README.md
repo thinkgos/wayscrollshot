@@ -138,7 +138,7 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-o, --output <PATH>` | <p>Output file path<br><br>(falls back to ~/Pictures or current directory respectively if XDG_PICTURES_DIR isn't set.)</p> | `$XDG_PICTURES_DIR/wayscrollshot-<timestamp>.png` |
+| `-o, --output <PATH>` | Output file path | `./wayscrollshot/wayscrollshot-<timestamp>.png` |
 | `-w, --preview-width <PX>` | Preview width in pixels | 280 |
 | `-c, --clipboard` | Copy to clipboard instead of saving | false |
 | `--no-preview` | Disable preview window | false |
