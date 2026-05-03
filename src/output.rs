@@ -94,7 +94,9 @@ fn command_exists(cmd: &str) -> bool {
 }
 
 fn default_output_dir() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join("Pictures")
         .join("wayscrollshot")
 }
