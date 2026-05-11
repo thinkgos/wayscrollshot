@@ -105,6 +105,28 @@ cargo build --release
 cp target/release/wayscrollshot ~/.local/bin/
 ```
 
+### 使用 Nix Flake
+
+#### 运行
+
+```shell
+nix run github:jswysnemc/wayscrollshot
+```
+
+#### home-manager 配置
+
+```nix
+# input
+inputs = {
+  nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+  
+  wayscrollshot = {
+    url = "github:jswysnemc/wayscrollshot";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+}
+```
+
 ## 使用方法
 
 ```bash

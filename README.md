@@ -96,13 +96,35 @@ OpenCV development files and Clang are required when building from source.
 
 ```bash
 # Install runtime and build dependencies (Arch Linux)
-sudo pacman -S slurp grim wl-clipboard opencv clang
+sudo pacman -S slurp grim wl-clipboard opencv clang libxkbcommon
 
 # Build
 cargo build --release
 
 # Install (optional)
 cp target/release/wayscrollshot ~/.local/bin/
+```
+
+### Use Nix Flake
+
+#### 运行
+
+```shell
+nix run github:jswysnemc/wayscrollshot
+```
+
+#### home-manager 配置
+
+```nix
+# input
+inputs = {
+  nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+  
+  wayscrollshot = {
+    url = "github:jswysnemc/wayscrollshot";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+}
 ```
 
 ## Usage

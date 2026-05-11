@@ -1,5 +1,6 @@
 /target/
-Cargo.lock
+# see https://doc.rust-lang.org/cargo/faq.html?highlight=cargo.lock#why-have-cargolock-in-version-control
+# Cargo.lock
 *.swp
 *.swo
 *~
@@ -13,3 +14,7 @@ screenshot-splicing/
 
 # Misc
 qs.py
+
+# Ignore build outputs from performing a nix-build or `nix build` command
+result
+result-*
