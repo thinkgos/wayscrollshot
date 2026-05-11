@@ -105,15 +105,15 @@ cargo build --release
 cp target/release/wayscrollshot ~/.local/bin/
 ```
 
-### Use Nix Flake
+### From Nix
 
-#### 运行
+#### Run
 
 ```shell
 nix run github:jswysnemc/wayscrollshot
 ```
 
-#### home-manager 配置
+#### home-manager configuration
 
 ```nix
 # input

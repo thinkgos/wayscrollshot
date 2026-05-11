@@ -105,7 +105,7 @@ cargo build --release
 cp target/release/wayscrollshot ~/.local/bin/
 ```
 
-### 使用 Nix Flake
+### 从Nix构建
 
 #### 运行
 
