@@ -17,3 +17,10 @@ rayon = "1.10"
 smithay-client-toolkit = "0.19"
 tiny-skia = "0.11"
 wayland-client = "0.31"
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
